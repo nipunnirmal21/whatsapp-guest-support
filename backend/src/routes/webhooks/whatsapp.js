@@ -1,7 +1,14 @@
 const express = require('express');
 const router = express.Router();
+const supabase = require('../../db/client');
 const logger = require('../../utils/logger');
 const { saveRawEvent } = require('../../db/rawEvents');
+const { extractTextFromMessage } = require('../../services/whatsapp/parser');
+const { markMessageAsRead } = require('../../services/whatsapp/sender');
+const {
+  findReservationByPhone,
+  findOrCreateConversation,
+} = require('../../services/reservations/lookup');
 
 // ---------------------------------------------------------------------------
 // GET /webhooks/whatsapp  —  Meta webhook verification handshake
@@ -111,35 +118,86 @@ router.post('/', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// processInboundMessage  —  async pipeline (stubbed for Phase 2)
+// saveInboundMessage  —  persist guest message against a conversation
 // ---------------------------------------------------------------------------
-// Each phase will flesh out one step of this pipeline:
-//   Phase 3 → guest / reservation lookup
-//   Phase 4 → rules engine + AI layer
-//   Phase 5 → escalation / dashboard integration
+async function saveInboundMessage(conversationId, message, textContent) {
+  const content = textContent ?? `[${message.type}]`;
+
+  const { data, error } = await supabase
+    .from('messages')
+    .insert({
+      conversation_id: conversationId,
+      direction: 'inbound',
+      source: 'guest',
+      content,
+      wa_message_id: message.id,
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    // Meta may retry webhooks — treat duplicate wa_message_id as idempotent
+    if (error.code === '23505') {
+      logger.info('Duplicate inbound message ignored', { waMessageId: message.id });
+      return null;
+    }
+
+    throw new Error(`Failed to save inbound message: ${error.message}`);
+  }
+
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// processInboundMessage  —  async pipeline
+// ---------------------------------------------------------------------------
+//   Phase 3 ✅ guest / reservation lookup, conversation storage
+//   Phase 4    rules engine + AI layer
+//   Phase 5    escalation / dashboard integration
 // ---------------------------------------------------------------------------
 async function processInboundMessage(message, contact, value) {
-  const from        = message.from;          // sender's phone number (E.164)
-  const messageType = message.type;          // text | image | audio | document | …
+  const from        = message.from;
+  const messageType = message.type;
   const displayName = contact?.profile?.name ?? 'Guest';
+  const textContent = extractTextFromMessage(message);
 
   logger.info('Processing inbound message', { from, messageType, displayName });
 
-  // Extract plain text (only text messages in Phase 2)
-  let textContent = null;
-  if (messageType === 'text') {
-    textContent = message.text?.body ?? '';
-  }
+  // Phase 3: match guest to active reservation by phone number
+  const reservationContext = await findReservationByPhone(from);
+  const reservationId = reservationContext?.reservation?.id ?? null;
 
-  // TODO (Phase 3): find or create conversation, match reservation
+  // Phase 3: find or create the conversation thread for this guest / reservation
+  const conversation = await findOrCreateConversation(from, reservationId);
+
+  // Phase 3: store inbound message for audit trail and dashboard inbox
+  const savedMessage = await saveInboundMessage(
+    conversation.id,
+    message,
+    textContent
+  );
+
+  // Acknowledge receipt to the guest (non-blocking — must not fail the pipeline)
+  markMessageAsRead(message.id).catch((err) =>
+    logger.warn('Failed to mark message as read', {
+      waMessageId: message.id,
+      error: err.message,
+    })
+  );
+
+  logger.info('Inbound message processed (Phase 3 complete)', {
+    conversationId: conversation.id,
+    reservationId,
+    reservationMatched: Boolean(reservationContext),
+    guestName: reservationContext?.guest?.full_name ?? displayName,
+    apartmentName: reservationContext?.apartment?.name ?? null,
+    messageId: savedMessage?.id ?? null,
+    messageType,
+    hasText: Boolean(textContent),
+  });
+
   // TODO (Phase 4): run rules engine, call AI if needed
   // TODO (Phase 5): escalate or send response
-
-  logger.info('Message queued for processing (pipeline stubs in place)', {
-    from,
-    messageType,
-    textContent,
-  });
 }
 
 module.exports = router;
