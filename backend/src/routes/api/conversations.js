@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../../db/client');
 const logger = require('../../utils/logger');
+const { sendTextMessage } = require('../../services/whatsapp/sender');
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -121,11 +122,95 @@ router.get('/:id', async (req, res, next) => {
 
 /**
  * POST /api/conversations/:id/reply
- * Sends or schedules a reply from the dashboard.
+ * Sends a human-authored reply from the dashboard to the guest.
+ *
+ * Body: { content: string }
  */
 router.post('/:id/reply', async (req, res, next) => {
   try {
-    res.status(200).json({ success: true, message: 'Phase 5 stub' });
+    const { id } = req.params;
+    const { content } = req.body;
+
+    if (!isValidUuid(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid conversation id' });
+    }
+
+    const trimmedContent = typeof content === 'string' ? content.trim() : '';
+    if (!trimmedContent) {
+      return res.status(400).json({ success: false, error: '"content" is required' });
+    }
+
+    const { data: conversation, error: conversationError } = await supabase
+      .from('conversations')
+      .select('id, guest_phone')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (conversationError) {
+      logger.error('Failed to fetch conversation for reply', {
+        conversationId: id,
+        error: conversationError.message,
+      });
+      const err = new Error('Failed to fetch conversation');
+      err.status = 500;
+      throw err;
+    }
+
+    if (!conversation) {
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+
+    const sendResult = await sendTextMessage(conversation.guest_phone, trimmedContent);
+    const waMessageId = sendResult?.messages?.[0]?.id ?? null;
+
+    const { data: message, error: messageError } = await supabase
+      .from('messages')
+      .insert({
+        conversation_id: conversation.id,
+        direction: 'outbound',
+        source: 'human',
+        content: trimmedContent,
+        wa_message_id: waMessageId,
+        delivery_status: waMessageId ? 'sent' : null,
+      })
+      .select('*')
+      .single();
+
+    if (messageError) {
+      logger.error('Failed to save dashboard reply', {
+        conversationId: id,
+        waMessageId,
+        error: messageError.message,
+      });
+      const err = new Error('Message sent but failed to save to database');
+      err.status = 500;
+      throw err;
+    }
+
+    const now = new Date().toISOString();
+    const { error: updateError } = await supabase
+      .from('conversations')
+      .update({ last_message_at: now })
+      .eq('id', conversation.id);
+
+    if (updateError) {
+      logger.error('Failed to update conversation timestamp after reply', {
+        conversationId: id,
+        messageId: message.id,
+        error: updateError.message,
+      });
+      const err = new Error('Message sent and saved but failed to update conversation');
+      err.status = 500;
+      throw err;
+    }
+
+    logger.info('Dashboard reply sent', {
+      conversationId: id,
+      messageId: message.id,
+      waMessageId,
+    });
+
+    return res.status(200).json({ success: true, data: message });
   } catch (err) {
     next(err);
   }
