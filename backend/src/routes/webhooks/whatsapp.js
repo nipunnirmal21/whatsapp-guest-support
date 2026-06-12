@@ -4,11 +4,13 @@ const supabase = require('../../db/client');
 const logger = require('../../utils/logger');
 const { saveRawEvent } = require('../../db/rawEvents');
 const { extractTextFromMessage } = require('../../services/whatsapp/parser');
-const { markMessageAsRead } = require('../../services/whatsapp/sender');
+const { markMessageAsRead, sendTextMessage } = require('../../services/whatsapp/sender');
 const {
   findReservationByPhone,
   findOrCreateConversation,
 } = require('../../services/reservations/lookup');
+const { runRulesEngine } = require('../../services/rules/engine');
+const { classifyAndDraft } = require('../../services/ai/classifier');
 
 // ---------------------------------------------------------------------------
 // GET /webhooks/whatsapp  —  Meta webhook verification handshake
@@ -149,10 +151,51 @@ async function saveInboundMessage(conversationId, message, textContent) {
 }
 
 // ---------------------------------------------------------------------------
+// saveOutboundMessage  —  persist an outbound reply against a conversation
+// ---------------------------------------------------------------------------
+async function saveOutboundMessage(conversationId, content, waMessageId, source) {
+  const { data, error } = await supabase
+    .from('messages')
+    .insert({
+      conversation_id: conversationId,
+      direction: 'outbound',
+      source,
+      content,
+      wa_message_id: waMessageId,
+      delivery_status: waMessageId ? 'sent' : null,
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to save outbound message: ${error.message}`);
+  }
+
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// updateConversationAiState  —  store LLM classification and draft for review
+// ---------------------------------------------------------------------------
+async function updateConversationAiState(conversationId, classification, draft) {
+  const { error } = await supabase
+    .from('conversations')
+    .update({
+      ai_classification: classification,
+      ai_draft: draft,
+    })
+    .eq('id', conversationId);
+
+  if (error) {
+    throw new Error(`Failed to update conversation AI state: ${error.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // processInboundMessage  —  async pipeline
 // ---------------------------------------------------------------------------
 //   Phase 3 ✅ guest / reservation lookup, conversation storage
-//   Phase 4    rules engine + AI layer
+//   Phase 4 ✅ rules engine + AI layer
 //   Phase 5    escalation / dashboard integration
 // ---------------------------------------------------------------------------
 async function processInboundMessage(message, contact, value) {
@@ -196,8 +239,67 @@ async function processInboundMessage(message, contact, value) {
     hasText: Boolean(textContent),
   });
 
-  // TODO (Phase 4): run rules engine, call AI if needed
-  // TODO (Phase 5): escalate or send response
+  // Duplicate webhook delivery — message already stored; skip response pipeline
+  if (!savedMessage) {
+    return;
+  }
+
+  // Phase 4: deterministic rules first, then AI for anything unhandled
+  const reservation = reservationContext?.reservation ?? null;
+  const apartment = reservationContext?.apartment
+    ? { ...reservationContext.apartment, policy: reservationContext.policy ?? null }
+    : null;
+
+  const rulesResult = await runRulesEngine(textContent, reservation, apartment);
+
+  if (rulesResult.outcome === 'auto_reply' && rulesResult.reply) {
+    try {
+      const sendResult = await sendTextMessage(from, rulesResult.reply);
+      const waMessageId = sendResult?.messages?.[0]?.id ?? null;
+
+      await saveOutboundMessage(
+        conversation.id,
+        rulesResult.reply,
+        waMessageId,
+        'system'
+      );
+
+      logger.info('Rules engine auto-reply sent', {
+        conversationId: conversation.id,
+        waMessageId,
+      });
+    } catch (err) {
+      logger.error('Failed to send or persist rules engine auto-reply', {
+        conversationId: conversation.id,
+        error: err.message,
+      });
+    }
+
+    return;
+  }
+
+  try {
+    const aiResult = await classifyAndDraft(textContent, reservationContext ?? {});
+
+    await updateConversationAiState(
+      conversation.id,
+      aiResult.classification,
+      aiResult.draft
+    );
+
+    logger.info('Conversation updated with AI classification', {
+      conversationId: conversation.id,
+      classification: aiResult.classification,
+      hasDraft: Boolean(aiResult.draft),
+    });
+  } catch (err) {
+    logger.error('Failed to classify message or update conversation', {
+      conversationId: conversation.id,
+      error: err.message,
+    });
+  }
+
+  // TODO (Phase 5): escalate or send AI draft based on classification
 }
 
 module.exports = router;
