@@ -3,7 +3,7 @@ import { useState } from 'react';
 const NAV_ITEMS = [
   { id: 'inbox', label: 'Inbox', badge: '4' },
   { id: 'reservations', label: 'Reservations', badge: null },
-  { id: 'escalations', label: 'Escalations', badge: '1' },
+  { id: 'escalations', label: 'Escalations', badge: '3' },
   { id: 'analytics', label: 'Analytics', badge: null },
   { id: 'settings', label: 'Settings', badge: null },
 ];
@@ -123,6 +123,52 @@ const CONVERSATIONS = [
   },
 ];
 
+const ESCALATIONS = [
+  {
+    id: 'esc-1',
+    conversationId: '2',
+    guest: 'Emma Richardson',
+    apartment: 'Panadura Ayurveda Retreat',
+    title: 'Hot water failure in ensuite',
+    reason: 'Maintenance emergency — guest checked in, hot water not working. Requires immediate vendor dispatch.',
+    severity: 'Urgent',
+    time: '22m ago',
+    status: 'Pending',
+  },
+  {
+    id: 'esc-2',
+    conversationId: '4',
+    guest: 'David Chen',
+    apartment: 'Negombo Ocean Breeze Luxury Studio',
+    title: 'AC not cooling — Negombo studio',
+    reason: 'Guest reports AC unit blowing warm air since 3 PM. Temperature in studio above 28°C.',
+    severity: 'High',
+    time: '45m ago',
+    status: 'Pending',
+  },
+  {
+    id: 'esc-3',
+    conversationId: '1',
+    guest: 'Nimal Perera',
+    apartment: 'Negombo Ocean Breeze Luxury Studio',
+    title: 'Late check-in request',
+    reason: 'Guest flight delayed; requesting check-in after 10 PM instead of standard 2 PM window.',
+    severity: 'Normal',
+    time: '1h ago',
+    status: 'Pending',
+  },
+];
+
+const ANALYTICS_CHART = [
+  { label: 'Mon', auto: 82, human: 18 },
+  { label: 'Tue', auto: 88, human: 12 },
+  { label: 'Wed', auto: 91, human: 9 },
+  { label: 'Thu', auto: 89, human: 11 },
+  { label: 'Fri', auto: 94, human: 6 },
+  { label: 'Sat', auto: 90, human: 10 },
+  { label: 'Sun', auto: 92, human: 8 },
+];
+
 function IconInbox() {
   return (
     <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
@@ -225,11 +271,27 @@ function StatusBadge({ status }) {
     Confirmed: 'bg-white/10 text-white border-white/20',
     Escalated: 'bg-black text-[#C9A227] border-[#C9A227]/60',
     Resolved: 'bg-[#132B4F] text-white/70 border-[#1E3A5F]',
+    Pending: 'bg-[#C9A227]/10 text-[#C9A227] border-[#C9A227]/40',
+    Acknowledged: 'bg-white/10 text-white border-white/20',
   };
 
   return (
     <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${styles[status] ?? styles.Confirmed}`}>
       {status}
+    </span>
+  );
+}
+
+function SeverityBadge({ severity }) {
+  const styles = {
+    Urgent: 'bg-black text-[#C9A227] border-[#C9A227]',
+    High: 'bg-[#C9A227]/20 text-[#C9A227] border-[#C9A227]/50',
+    Normal: 'bg-white/5 text-white/70 border-white/20',
+  };
+
+  return (
+    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${styles[severity] ?? styles.Normal}`}>
+      {severity}
     </span>
   );
 }
@@ -275,6 +337,32 @@ function MessageBubble({ message }) {
   }
 
   return null;
+}
+
+function ToggleSwitch({ enabled, onChange, label, description }) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-5 py-4">
+      <div>
+        <p className="text-sm font-medium text-white">{label}</p>
+        {description && <p className="mt-1 text-xs text-white/50">{description}</p>}
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={enabled}
+        onClick={() => onChange(!enabled)}
+        className={`relative h-7 w-12 shrink-0 rounded-full transition-colors duration-200 ${
+          enabled ? 'bg-[#C9A227]' : 'bg-[#1E3A5F]'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-md transition-transform duration-200 ${
+            enabled ? 'left-[22px]' : 'left-0.5'
+          }`}
+        />
+      </button>
+    </div>
+  );
 }
 
 function InboxView({ selectedId, setSelectedId, replyText, setReplyText }) {
@@ -508,24 +596,12 @@ function ReservationsView() {
           <table className="w-full min-w-[900px] border-collapse text-left">
             <thead className="sticky top-0 z-10 bg-black">
               <tr className="border-b border-[#1E3A5F]">
-                <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9A227]">
-                  Guest Name
-                </th>
-                <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9A227]">
-                  Apartment
-                </th>
-                <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9A227]">
-                  Check-in
-                </th>
-                <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9A227]">
-                  Check-out
-                </th>
-                <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9A227]">
-                  Status
-                </th>
-                <th className="px-6 py-4 text-right text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9A227]">
-                  Total Price
-                </th>
+                <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9A227]">Guest Name</th>
+                <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9A227]">Apartment</th>
+                <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9A227]">Check-in</th>
+                <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9A227]">Check-out</th>
+                <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9A227]">Status</th>
+                <th className="px-6 py-4 text-right text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9A227]">Total Price</th>
               </tr>
             </thead>
             <tbody>
@@ -563,30 +639,241 @@ function ReservationsView() {
 
         <div className="flex items-center justify-between border-t border-[#1E3A5F] bg-black px-6 py-4">
           <p className="text-xs text-white/40">Showing all active Serendib Vacation reservations</p>
-          <p className="text-xs font-medium text-[#C9A227]">
-            Negombo · Panadura · Nuwara Eliya
-          </p>
+          <p className="text-xs font-medium text-[#C9A227]">Negombo · Panadura · Nuwara Eliya</p>
         </div>
       </div>
     </div>
   );
 }
 
-function PlaceholderView({ activeNav }) {
-  const labels = {
-    escalations: 'Escalations queue',
-    analytics: 'Analytics dashboard',
-    settings: 'Settings panel',
-  };
+function EscalationsView({ tickets, onTakeOver }) {
+  const pendingCount = tickets.filter((t) => t.status === 'Pending').length;
 
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center bg-[#132B4F] p-8">
-      <div className="max-w-md rounded-2xl border border-[#1E3A5F] bg-[#0B1F3A] p-10 text-center shadow-xl">
-        <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-[#C9A227]">Coming Soon</p>
-        <h3 className="mt-3 text-xl font-bold text-white">{labels[activeNav]}</h3>
-        <p className="mt-2 text-sm text-white/50">
-          This section will be available in a future release of the Serendib Vacation admin dashboard.
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#132B4F] p-6">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-[#C9A227]">Human Handover</p>
+          <h3 className="mt-1 text-2xl font-bold text-white">Escalated Tickets</h3>
+          <p className="mt-1 text-sm text-white/50">
+            {pendingCount} ticket{pendingCount !== 1 ? 's' : ''} awaiting operator action
+          </p>
+        </div>
+        <div className="rounded-xl border border-[#C9A227]/40 bg-black px-4 py-3">
+          <p className="text-[10px] uppercase tracking-widest text-[#C9A227]">Priority Queue</p>
+          <p className="text-lg font-bold text-white">{tickets.length} open</p>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+        {tickets.map((ticket) => (
+          <div
+            key={ticket.id}
+            className={`rounded-2xl border bg-[#0B1F3A] p-6 shadow-xl transition ${
+              ticket.status === 'Acknowledged'
+                ? 'border-white/20 opacity-70'
+                : 'border-[#1E3A5F] hover:border-[#C9A227]/40'
+            }`}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h4 className="text-base font-bold text-white">{ticket.title}</h4>
+                  <SeverityBadge severity={ticket.severity} />
+                  <StatusBadge status={ticket.status} />
+                </div>
+                <p className="mt-2 text-sm text-[#C9A227]/90">
+                  {ticket.guest} · {ticket.apartment}
+                </p>
+                <p className="mt-3 text-sm leading-relaxed text-white/60">{ticket.reason}</p>
+                <p className="mt-3 text-[10px] uppercase tracking-widest text-white/30">
+                  Escalated {ticket.time}
+                </p>
+              </div>
+
+              <div className="flex shrink-0 flex-col gap-2">
+                {ticket.status === 'Pending' ? (
+                  <button
+                    type="button"
+                    onClick={() => onTakeOver(ticket)}
+                    className="rounded-xl border border-[#C9A227] bg-[#C9A227] px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37]"
+                  >
+                    Take Over
+                  </button>
+                ) : (
+                  <span className="rounded-xl border border-white/20 bg-[#132B4F] px-5 py-2.5 text-center text-xs font-bold uppercase tracking-wide text-white/50">
+                    Assigned to You
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-5 py-2.5 text-xs font-medium text-white/70 transition hover:border-[#C9A227]/30 hover:text-white"
+                >
+                  View Conversation
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsView() {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[#132B4F] p-6">
+      <div className="mb-6">
+        <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-[#C9A227]">Serendib Vacation</p>
+        <h3 className="mt-1 text-2xl font-bold text-white">Performance Overview</h3>
+        <p className="mt-1 text-sm text-white/50">Last 7 days across all properties</p>
+      </div>
+
+      <div className="mb-6 grid gap-4 sm:grid-cols-3">
+        <div className="rounded-2xl border border-[#1E3A5F] bg-[#0B1F3A] p-6 shadow-xl">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-white/40">Total Bookings</p>
+          <p className="mt-3 text-3xl font-bold text-white">28</p>
+          <p className="mt-2 text-xs text-[#C9A227]">+4 vs last week</p>
+        </div>
+        <div className="rounded-2xl border border-[#1E3A5F] bg-[#0B1F3A] p-6 shadow-xl">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-white/40">Avg Response Time</p>
+          <p className="mt-3 text-3xl font-bold text-white">2.4<span className="text-lg text-white/50"> min</span></p>
+          <p className="mt-2 text-xs text-[#C9A227]">−18% improvement</p>
+        </div>
+        <div className="rounded-2xl border border-[#C9A227]/30 bg-black p-6 shadow-xl">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">AI Resolution Rate</p>
+          <p className="mt-3 text-3xl font-bold text-[#C9A227]">92%</p>
+          <p className="mt-2 text-xs text-white/50">Rules engine + classifier</p>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-[#1E3A5F] bg-[#0B1F3A] p-6 shadow-2xl shadow-black/40">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h4 className="text-sm font-bold uppercase tracking-widest text-[#C9A227]">Message Volume</h4>
+            <p className="mt-1 text-xs text-white/50">Auto-resolved vs human-handled conversations</p>
+          </div>
+          <div className="flex gap-4 text-xs">
+            <span className="flex items-center gap-2 text-white/70">
+              <span className="h-2.5 w-2.5 rounded-full bg-[#C9A227]" />
+              AI Resolved
+            </span>
+            <span className="flex items-center gap-2 text-white/70">
+              <span className="h-2.5 w-2.5 rounded-full bg-[#1E3A5F]" />
+              Human Handled
+            </span>
+          </div>
+        </div>
+
+        <div className="flex h-64 items-end justify-between gap-3 rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-6 pb-6 pt-8">
+          {ANALYTICS_CHART.map((day) => (
+            <div key={day.label} className="flex flex-1 flex-col items-center gap-2">
+              <div className="flex h-40 w-full items-end justify-center gap-1">
+                <div
+                  className="w-5 rounded-t-sm bg-[#C9A227] shadow-lg shadow-[#C9A227]/20"
+                  style={{ height: `${day.auto}%` }}
+                  title={`AI: ${day.auto}%`}
+                />
+                <div
+                  className="w-5 rounded-t-sm bg-[#1E3A5F]"
+                  style={{ height: `${day.human * 4}%` }}
+                  title={`Human: ${day.human}%`}
+                />
+              </div>
+              <span className="text-[10px] font-medium uppercase tracking-wider text-white/40">{day.label}</span>
+            </div>
+          ))}
+        </div>
+
+        <p className="mt-4 text-center text-[10px] uppercase tracking-widest text-white/30">
+          Chart mockup · Connect backend analytics API for live data
         </p>
+      </div>
+    </div>
+  );
+}
+
+function SettingsView({
+  aiAutoReply,
+  setAiAutoReply,
+  webhookToken,
+  setWebhookToken,
+  openaiKey,
+  setOpenaiKey,
+  onSave,
+  saveMessage,
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[#132B4F] p-6">
+      <div className="mx-auto w-full max-w-2xl">
+        <div className="mb-8">
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-[#C9A227]">Configuration</p>
+          <h3 className="mt-1 text-2xl font-bold text-white">Integration Settings</h3>
+          <p className="mt-1 text-sm text-white/50">
+            Manage WhatsApp webhooks and AI automation for Serendib Vacation
+          </p>
+        </div>
+
+        <div className="space-y-6">
+          <section>
+            <h4 className="mb-3 text-xs font-bold uppercase tracking-widest text-[#C9A227]">Automation</h4>
+            <ToggleSwitch
+              enabled={aiAutoReply}
+              onChange={setAiAutoReply}
+              label="AI Auto-Reply"
+              description="Allow the rules engine and classifier to send automated WhatsApp replies without operator approval."
+            />
+          </section>
+
+          <section>
+            <h4 className="mb-3 text-xs font-bold uppercase tracking-widest text-[#C9A227]">WhatsApp Webhook</h4>
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-white">Webhook Verification Token</span>
+              <input
+                type="text"
+                value={webhookToken}
+                onChange={(e) => setWebhookToken(e.target.value)}
+                placeholder="Enter WEBHOOK_VERIFY_TOKEN"
+                className="w-full rounded-xl border border-[#1E3A5F] bg-[#0B1F3A] px-4 py-3 text-sm text-white placeholder-white/30 outline-none transition focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]"
+              />
+              <span className="mt-2 block text-xs text-white/40">
+                Must match the verify token configured in Meta Developer Console.
+              </span>
+            </label>
+          </section>
+
+          <section>
+            <h4 className="mb-3 text-xs font-bold uppercase tracking-widest text-[#C9A227]">OpenAI</h4>
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-white">OpenAI API Key</span>
+              <input
+                type="password"
+                value={openaiKey}
+                onChange={(e) => setOpenaiKey(e.target.value)}
+                placeholder="sk-..."
+                className="w-full rounded-xl border border-[#1E3A5F] bg-[#0B1F3A] px-4 py-3 text-sm text-white placeholder-white/30 outline-none transition focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]"
+              />
+              <span className="mt-2 block text-xs text-white/40">
+                Used by classifyAndDraft for unhandled guest messages. Stored server-side only in production.
+              </span>
+            </label>
+          </section>
+
+          <div className="flex items-center justify-between border-t border-[#1E3A5F] pt-6">
+            {saveMessage ? (
+              <p className="text-sm font-medium text-[#C9A227]">{saveMessage}</p>
+            ) : (
+              <p className="text-xs text-white/40">Changes apply to the backend .env on save.</p>
+            )}
+            <button
+              type="button"
+              onClick={onSave}
+              className="rounded-xl bg-[#C9A227] px-6 py-3 text-sm font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37]"
+            >
+              Save Settings
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -596,8 +883,30 @@ export default function App() {
   const [activeNav, setActiveNav] = useState('inbox');
   const [selectedId, setSelectedId] = useState(CONVERSATIONS[0].id);
   const [replyText, setReplyText] = useState('');
+  const [escalationTickets, setEscalationTickets] = useState(ESCALATIONS);
+  const [aiAutoReply, setAiAutoReply] = useState(true);
+  const [webhookToken, setWebhookToken] = useState('serendib_webhook_2026');
+  const [openaiKey, setOpenaiKey] = useState('');
+  const [saveMessage, setSaveMessage] = useState('');
 
   const header = HEADER_COPY[activeNav] ?? HEADER_COPY.inbox;
+  const pendingEscalations = escalationTickets.filter((t) => t.status === 'Pending').length;
+
+  function handleTakeOver(ticket) {
+    setEscalationTickets((prev) =>
+      prev.map((t) => (t.id === ticket.id ? { ...t, status: 'Acknowledged' } : t))
+    );
+
+    if (ticket.conversationId) {
+      setSelectedId(ticket.conversationId);
+      setActiveNav('inbox');
+    }
+  }
+
+  function handleSaveSettings() {
+    setSaveMessage('Settings saved successfully.');
+    setTimeout(() => setSaveMessage(''), 3000);
+  }
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-black font-sans text-white antialiased">
@@ -618,6 +927,10 @@ export default function App() {
           {NAV_ITEMS.map((item) => {
             const Icon = NAV_ICONS[item.id];
             const isActive = activeNav === item.id;
+            const badge =
+              item.id === 'escalations'
+                ? String(pendingEscalations || item.badge)
+                : item.badge;
 
             return (
               <button
@@ -634,13 +947,13 @@ export default function App() {
                   <Icon />
                   {item.label}
                 </span>
-                {item.badge && (
+                {badge && (
                   <span
                     className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
                       isActive ? 'bg-[#0B1F3A]/20 text-[#0B1F3A]' : 'bg-[#C9A227] text-[#0B1F3A]'
                     }`}
                   >
-                    {item.badge}
+                    {badge}
                   </span>
                 )}
               </button>
@@ -653,12 +966,12 @@ export default function App() {
             <p className="text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">Live Stats</p>
             <div className="mt-3 grid grid-cols-2 gap-3">
               <div>
-                <p className="text-xl font-bold text-white">3</p>
-                <p className="text-[10px] text-white/50">Properties</p>
+                <p className="text-xl font-bold text-white">6</p>
+                <p className="text-[10px] text-white/50">Active Stays</p>
               </div>
               <div>
-                <p className="text-xl font-bold text-[#C9A227]">4</p>
-                <p className="text-[10px] text-white/50">Active Bookings</p>
+                <p className="text-xl font-bold text-[#C9A227]">92%</p>
+                <p className="text-[10px] text-white/50">Auto-Resolved</p>
               </div>
             </div>
           </div>
@@ -690,7 +1003,7 @@ export default function App() {
             >
               <IconBell />
               <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#C9A227] text-[9px] font-bold text-[#0B1F3A]">
-                1
+                {pendingEscalations || 1}
               </span>
             </button>
 
@@ -718,8 +1031,23 @@ export default function App() {
 
           {activeNav === 'reservations' && <ReservationsView />}
 
-          {activeNav !== 'inbox' && activeNav !== 'reservations' && (
-            <PlaceholderView activeNav={activeNav} />
+          {activeNav === 'escalations' && (
+            <EscalationsView tickets={escalationTickets} onTakeOver={handleTakeOver} />
+          )}
+
+          {activeNav === 'analytics' && <AnalyticsView />}
+
+          {activeNav === 'settings' && (
+            <SettingsView
+              aiAutoReply={aiAutoReply}
+              setAiAutoReply={setAiAutoReply}
+              webhookToken={webhookToken}
+              setWebhookToken={setWebhookToken}
+              openaiKey={openaiKey}
+              setOpenaiKey={setOpenaiKey}
+              onSave={handleSaveSettings}
+              saveMessage={saveMessage}
+            />
           )}
         </main>
       </div>
