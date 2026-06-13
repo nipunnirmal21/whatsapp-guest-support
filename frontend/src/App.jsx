@@ -8,7 +8,7 @@ const NAV_ITEMS = [
   { id: 'settings', label: 'Settings', badge: null },
 ];
 
-const CONVERSATIONS = [
+const INITIAL_CONVERSATIONS = [
   {
     id: '1',
     guest: 'Nimal Perera',
@@ -365,8 +365,8 @@ function ToggleSwitch({ enabled, onChange, label, description }) {
   );
 }
 
-function InboxView({ selectedId, setSelectedId, replyText, setReplyText }) {
-  const selected = CONVERSATIONS.find((c) => c.id === selectedId) ?? CONVERSATIONS[0];
+function InboxView({ conversations, selectedId, setSelectedId, replyText, setReplyText, handleSendMessage }) {
+  const selected = conversations.find((c) => c.id === selectedId) ?? conversations[0];
 
   return (
     <>
@@ -375,13 +375,13 @@ function InboxView({ selectedId, setSelectedId, replyText, setReplyText }) {
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-bold uppercase tracking-widest text-[#C9A227]">Conversations</h3>
             <span className="rounded-full bg-[#132B4F] px-2 py-0.5 text-[10px] text-white/60">
-              {CONVERSATIONS.length} active
+              {conversations.length} active
             </span>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {CONVERSATIONS.map((convo) => {
+          {conversations.map((convo) => {
             const isSelected = convo.id === selectedId;
 
             return (
@@ -470,11 +470,18 @@ function InboxView({ selectedId, setSelectedId, replyText, setReplyText }) {
               rows={2}
               value={replyText}
               onChange={(e) => setReplyText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSendMessage();
+                }
+              }}
               placeholder="Type your reply to the guest..."
               className="flex-1 resize-none rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-4 py-3 text-sm text-white placeholder-white/30 outline-none transition focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]"
             />
             <button
               type="button"
+              onClick={handleSendMessage}
               className="shrink-0 rounded-xl bg-[#C9A227] px-5 py-3 text-sm font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37]"
             >
               Send
@@ -566,26 +573,26 @@ function InboxView({ selectedId, setSelectedId, replyText, setReplyText }) {
   );
 }
 
-function ReservationsView() {
+function ReservationsView({ conversations }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#132B4F] p-6">
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-[#C9A227]">Serendib Vacation</p>
           <h3 className="mt-1 text-2xl font-bold text-white">All Bookings</h3>
-          <p className="mt-1 text-sm text-white/50">{CONVERSATIONS.length} reservations across 3 properties</p>
+          <p className="mt-1 text-sm text-white/50">{conversations.length} reservations across 3 properties</p>
         </div>
         <div className="flex gap-3">
           <div className="rounded-xl border border-[#1E3A5F] bg-[#0B1F3A] px-4 py-3">
             <p className="text-[10px] uppercase tracking-widest text-white/40">Checked In</p>
             <p className="text-lg font-bold text-[#C9A227]">
-              {CONVERSATIONS.filter((c) => c.status === 'Checked In').length}
+              {conversations.filter((c) => c.status === 'Checked In').length}
             </p>
           </div>
           <div className="rounded-xl border border-[#1E3A5F] bg-[#0B1F3A] px-4 py-3">
             <p className="text-[10px] uppercase tracking-widest text-white/40">Confirmed</p>
             <p className="text-lg font-bold text-white">
-              {CONVERSATIONS.filter((c) => c.status === 'Confirmed').length}
+              {conversations.filter((c) => c.status === 'Confirmed').length}
             </p>
           </div>
         </div>
@@ -605,7 +612,7 @@ function ReservationsView() {
               </tr>
             </thead>
             <tbody>
-              {CONVERSATIONS.map((booking, index) => (
+              {conversations.map((booking, index) => (
                 <tr
                   key={booking.id}
                   className={`border-b border-[#1E3A5F]/60 transition hover:bg-[#132B4F] ${
@@ -881,7 +888,8 @@ function SettingsView({
 
 export default function App() {
   const [activeNav, setActiveNav] = useState('inbox');
-  const [selectedId, setSelectedId] = useState(CONVERSATIONS[0].id);
+  const [conversations, setConversations] = useState(INITIAL_CONVERSATIONS);
+  const [selectedId, setSelectedId] = useState(INITIAL_CONVERSATIONS[0].id);
   const [replyText, setReplyText] = useState('');
   const [escalationTickets, setEscalationTickets] = useState(ESCALATIONS);
   const [aiAutoReply, setAiAutoReply] = useState(true);
@@ -891,6 +899,33 @@ export default function App() {
 
   const header = HEADER_COPY[activeNav] ?? HEADER_COPY.inbox;
   const pendingEscalations = escalationTickets.filter((t) => t.status === 'Pending').length;
+
+  function handleSendMessage() {
+    const trimmed = replyText.trim();
+    if (!trimmed) return;
+
+    const newMessage = {
+      id: Date.now(),
+      from: 'system',
+      text: trimmed,
+      time: 'Just now',
+    };
+
+    setConversations((prev) =>
+      prev.map((convo) =>
+        convo.id === selectedId
+          ? {
+              ...convo,
+              messages: [...convo.messages, newMessage],
+              lastMessage: trimmed,
+              time: 'Just now',
+            }
+          : convo
+      )
+    );
+
+    setReplyText('');
+  }
 
   function handleTakeOver(ticket) {
     setEscalationTickets((prev) =>
@@ -1022,14 +1057,16 @@ export default function App() {
         <main className="flex min-h-0 flex-1">
           {activeNav === 'inbox' && (
             <InboxView
+              conversations={conversations}
               selectedId={selectedId}
               setSelectedId={setSelectedId}
               replyText={replyText}
               setReplyText={setReplyText}
+              handleSendMessage={handleSendMessage}
             />
           )}
 
-          {activeNav === 'reservations' && <ReservationsView />}
+          {activeNav === 'reservations' && <ReservationsView conversations={conversations} />}
 
           {activeNav === 'escalations' && (
             <EscalationsView tickets={escalationTickets} onTakeOver={handleTakeOver} />
