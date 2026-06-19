@@ -1,163 +1,122 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+
+const API_BASE = 'http://localhost:3000';
 
 const NAV_ITEMS = [
-  { id: 'inbox', label: 'Inbox', badge: '4' },
+  { id: 'inbox', label: 'Inbox', badge: null },
   { id: 'reservations', label: 'Reservations', badge: null },
-  { id: 'escalations', label: 'Escalations', badge: '3' },
+  { id: 'escalations', label: 'Escalations', badge: null },
   { id: 'analytics', label: 'Analytics', badge: null },
   { id: 'settings', label: 'Settings', badge: null },
 ];
 
-const INITIAL_CONVERSATIONS = [
-  {
-    id: '1',
-    guest: 'Nimal Perera',
-    phone: '+94 77 234 5678',
-    apartment: 'Negombo Ocean Breeze Luxury Studio',
-    bookingId: 'SV-NGB-1042',
-    checkIn: '12 Jun 2026',
-    checkOut: '15 Jun 2026',
-    status: 'Checked In',
-    priority: 'normal',
-    lastMessage: 'What time is checkout on Sunday?',
-    time: '5m ago',
-    unread: 1,
-    aiInsight: 'Checkout inquiry',
-    messages: [
-      { id: 1, from: 'guest', text: 'Ayubowan! We just checked in. The ocean view is stunning.', time: '09:14' },
-      { id: 2, from: 'system', text: 'Welcome to Negombo Ocean Breeze Luxury Studio. Check-in from 2:00 PM. Wi-Fi: OceanBreeze_Guest · Password: Negombo@2026', time: '09:15' },
-      { id: 3, from: 'guest', text: 'Is airport pickup still arranged for our departure?', time: '14:22' },
-      { id: 4, from: 'ai', text: 'Your airport transfer is confirmed for 15 Jun at 10:30 AM. Our driver will contact you on WhatsApp 30 minutes prior.', time: '14:22' },
-      { id: 5, from: 'guest', text: 'What time is checkout on Sunday?', time: '16:48' },
-    ],
-    reservation: {
-      guests: 2,
-      nights: 3,
-      source: 'Airbnb',
-      total: 'LKR 84,500',
-      policy: 'Checkout by 11:00 AM',
-    },
-  },
-  {
-    id: '2',
-    guest: 'Emma Richardson',
-    phone: '+44 7911 123456',
-    apartment: 'Panadura Ayurveda Retreat',
-    bookingId: 'SV-PAN-2087',
-    checkIn: '14 Jun 2026',
-    checkOut: '21 Jun 2026',
-    status: 'Confirmed',
-    priority: 'escalated',
-    lastMessage: 'The hot water in the ensuite is not working.',
-    time: '22m ago',
-    unread: 2,
-    aiInsight: 'Maintenance emergency',
-    messages: [
-      { id: 1, from: 'guest', text: 'Hello, we arrive tomorrow for the 7-day wellness package. Can we arrange early check-in at 11 AM?', time: '08:30' },
-      { id: 2, from: 'ai', text: 'Early check-in requests require staff approval. A Serendib Vacation coordinator will review your message shortly.', time: '08:31' },
-      { id: 3, from: 'guest', text: 'We are here now but the hot water in the ensuite is not working.', time: '16:10' },
-      { id: 4, from: 'guest', text: 'The hot water in the ensuite is not working.', time: '16:12' },
-    ],
-    reservation: {
-      guests: 1,
-      nights: 7,
-      source: 'Booking.com',
-      total: 'USD 1,240',
-      policy: 'Checkout by 10:00 AM',
-    },
-  },
-  {
-    id: '3',
-    guest: 'Hans Müller',
-    phone: '+49 170 882 3344',
-    apartment: 'Global Grand Residencies Nuwara Eliya',
-    bookingId: 'SV-NUW-3156',
-    checkIn: '10 Jun 2026',
-    checkOut: '14 Jun 2026',
-    status: 'Checked In',
-    priority: 'normal',
-    lastMessage: 'Perfect, thank you very much!',
-    time: '1h ago',
-    unread: 0,
-    aiInsight: 'Wi-Fi credentials request',
-    messages: [
-      { id: 1, from: 'guest', text: 'Guten Tag. It is quite cold up here — is extra bedding available?', time: '19:05' },
-      { id: 2, from: 'system', text: 'Additional blankets are stored in the wardrobe. Housekeeping can deliver more upon request before 9 PM.', time: '19:06' },
-      { id: 3, from: 'guest', text: 'Could you send the Wi-Fi details again please?', time: '20:40' },
-      { id: 4, from: 'system', text: 'Network: GGR_NuwaraEliya · Password: HillCountry@2026', time: '20:40' },
-      { id: 5, from: 'guest', text: 'Perfect, thank you very much!', time: '20:42' },
-    ],
-    reservation: {
-      guests: 2,
-      nights: 4,
-      source: 'Direct',
-      total: 'EUR 920',
-      policy: 'Checkout by 11:00 AM',
-    },
-  },
-  {
-    id: '4',
-    guest: 'Priya Fernando',
-    phone: '+94 71 998 7766',
-    apartment: 'Negombo Ocean Breeze Luxury Studio',
-    bookingId: 'SV-NGB-1098',
-    checkIn: '16 Jun 2026',
-    checkOut: '19 Jun 2026',
-    status: 'Confirmed',
-    priority: 'normal',
-    lastMessage: 'Is parking available near the studio?',
-    time: '3h ago',
-    unread: 1,
-    aiInsight: 'Parking inquiry',
-    messages: [
-      { id: 1, from: 'guest', text: 'Hi, booking confirmed for next week. Travelling from Kandy with our own car.', time: '11:05' },
-      { id: 2, from: 'guest', text: 'Is parking available near the studio?', time: '11:06' },
-    ],
-    reservation: {
-      guests: 3,
-      nights: 3,
-      source: 'Airbnb',
-      total: 'LKR 96,000',
-      policy: 'Checkout by 11:00 AM',
-    },
-  },
-];
+function formatDate(dateStr) {
+  if (!dateStr) return '—';
+  return new Date(dateStr).toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
 
-const ESCALATIONS = [
-  {
-    id: 'esc-1',
-    conversationId: '2',
-    guest: 'Emma Richardson',
-    apartment: 'Panadura Ayurveda Retreat',
-    title: 'Hot water failure in ensuite',
-    reason: 'Maintenance emergency — guest checked in, hot water not working. Requires immediate vendor dispatch.',
-    severity: 'Urgent',
-    time: '22m ago',
-    status: 'Pending',
-  },
-  {
-    id: 'esc-2',
-    conversationId: '4',
-    guest: 'David Chen',
-    apartment: 'Negombo Ocean Breeze Luxury Studio',
-    title: 'AC not cooling — Negombo studio',
-    reason: 'Guest reports AC unit blowing warm air since 3 PM. Temperature in studio above 28°C.',
-    severity: 'High',
-    time: '45m ago',
-    status: 'Pending',
-  },
-  {
-    id: 'esc-3',
-    conversationId: '1',
-    guest: 'Nimal Perera',
-    apartment: 'Negombo Ocean Breeze Luxury Studio',
-    title: 'Late check-in request',
-    reason: 'Guest flight delayed; requesting check-in after 10 PM instead of standard 2 PM window.',
-    severity: 'Normal',
-    time: '1h ago',
-    status: 'Pending',
-  },
-];
+function formatTime(dateStr) {
+  if (!dateStr) return '';
+  return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatRelativeTime(dateStr) {
+  if (!dateStr) return '';
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return formatDate(dateStr);
+}
+
+function calculateNights(checkin, checkout) {
+  if (!checkin || !checkout) return 0;
+  const start = new Date(checkin);
+  const end = new Date(checkout);
+  return Math.max(0, Math.round((end - start) / (1000 * 60 * 60 * 24)));
+}
+
+function mapConversationStatus(convStatus, resStatus) {
+  if (convStatus === 'escalated' || convStatus === 'manual') return 'Escalated';
+  if (convStatus === 'resolved') return 'Resolved';
+  if (resStatus === 'checked_in') return 'Checked In';
+  if (resStatus === 'checked_out') return 'Resolved';
+  return 'Confirmed';
+}
+
+function mapMessage(msg) {
+  let from = 'system';
+  if (msg.direction === 'inbound' || msg.from === 'guest') {
+    from = 'guest';
+  } else if (msg.source === 'ai' || msg.from === 'ai') {
+    from = 'ai';
+  }
+
+  return {
+    id: msg.id,
+    from,
+    text: msg.content ?? msg.text ?? '',
+    time: formatTime(msg.created_at) || msg.time || '',
+  };
+}
+
+function normalizeConversation(raw) {
+  if (raw.guest && Array.isArray(raw.messages)) {
+    return raw;
+  }
+
+  const reservation = raw.reservation ?? null;
+  const guest = reservation?.guest ?? null;
+  const apartment = reservation?.apartment ?? null;
+  const messages = (raw.messages ?? []).map(mapMessage);
+  const lastMsg = messages.length > 0 ? messages[messages.length - 1].text : '';
+
+  return {
+    id: raw.id,
+    guest: guest?.full_name ?? raw.guest_name ?? 'Guest',
+    phone: guest?.phone_number ?? raw.guest_phone ?? '',
+    apartment: apartment?.name ?? '—',
+    bookingId: reservation?.booking_id ?? '—',
+    checkIn: formatDate(reservation?.checkin_date),
+    checkOut: formatDate(reservation?.checkout_date),
+    status: mapConversationStatus(raw.status, reservation?.status),
+    priority: raw.status === 'escalated' || raw.status === 'manual' ? 'escalated' : 'normal',
+    lastMessage: lastMsg || raw.ai_draft || 'No messages yet',
+    time: formatRelativeTime(raw.last_message_at ?? raw.created_at),
+    unread: raw.unread ?? 0,
+    aiInsight: raw.ai_classification ?? '—',
+    messages,
+    reservation: {
+      guests: raw.guest_count ?? 1,
+      nights: calculateNights(reservation?.checkin_date, reservation?.checkout_date),
+      source: reservation?.booking_source ?? '—',
+      total: raw.total ?? '—',
+      policy: raw.policy ?? 'Checkout per house policy',
+    },
+  };
+}
+
+function deriveEscalationTickets(conversations) {
+  return conversations
+    .filter((c) => c.priority === 'escalated' || c.status === 'Escalated')
+    .map((c) => ({
+      id: `esc-${c.id}`,
+      conversationId: c.id,
+      guest: c.guest,
+      apartment: c.apartment,
+      title: c.aiInsight !== '—' ? c.aiInsight : 'Escalated conversation',
+      reason: c.aiInsight !== '—' ? c.aiInsight : 'Requires human handover',
+      severity: 'Normal',
+      time: c.time,
+      status: 'Pending',
+    }));
+}
 
 const ANALYTICS_CHART = [
   { label: 'Mon', auto: 82, human: 18 },
@@ -365,8 +324,33 @@ function ToggleSwitch({ enabled, onChange, label, description }) {
   );
 }
 
-function InboxView({ conversations, selectedId, setSelectedId, replyText, setReplyText, handleSendMessage }) {
+function LoadingScreen() {
+  return (
+    <div className="flex h-screen w-full flex-col items-center justify-center bg-black">
+      <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-[#C9A227]/40 bg-[#0B1F3A] shadow-2xl shadow-[#C9A227]/10">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#C9A227]/30 border-t-[#C9A227]" />
+      </div>
+      <p className="mt-8 text-lg font-semibold tracking-wide text-[#C9A227]">
+        Loading Serendib Vacation Data...
+      </p>
+      <p className="mt-2 text-xs uppercase tracking-[0.3em] text-white/30">Guest Support Dashboard</p>
+    </div>
+  );
+}
+
+function InboxView({ conversations, selectedId, setSelectedId, replyText, setReplyText, handleSendMessage, sendError }) {
   const selected = conversations.find((c) => c.id === selectedId) ?? conversations[0];
+
+  if (!selected) {
+    return (
+      <div className="flex min-w-0 flex-1 items-center justify-center bg-[#132B4F]">
+        <div className="text-center">
+          <p className="text-sm font-medium text-white/60">No conversations yet</p>
+          <p className="mt-2 text-xs text-white/40">Guest messages will appear here when received via WhatsApp</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -465,6 +449,11 @@ function InboxView({ conversations, selectedId, setSelectedId, replyText, setRep
         </div>
 
         <div className="border-t border-[#1E3A5F] bg-[#0B1F3A] px-6 py-4">
+          {sendError && (
+            <p className="mx-auto mb-3 max-w-2xl rounded-lg border border-[#C9A227]/40 bg-black px-4 py-2 text-center text-xs text-[#C9A227]">
+              {sendError}
+            </p>
+          )}
           <div className="mx-auto flex max-w-2xl items-end gap-3">
             <textarea
               rows={2}
@@ -888,24 +877,74 @@ function SettingsView({
 
 export default function App() {
   const [activeNav, setActiveNav] = useState('inbox');
-  const [conversations, setConversations] = useState(INITIAL_CONVERSATIONS);
-  const [selectedId, setSelectedId] = useState(INITIAL_CONVERSATIONS[0].id);
+  const [conversations, setConversations] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
   const [replyText, setReplyText] = useState('');
-  const [escalationTickets, setEscalationTickets] = useState(ESCALATIONS);
+  const [escalationTickets, setEscalationTickets] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [sendError, setSendError] = useState(null);
   const [aiAutoReply, setAiAutoReply] = useState(true);
   const [webhookToken, setWebhookToken] = useState('serendib_webhook_2026');
   const [openaiKey, setOpenaiKey] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchConversations() {
+      try {
+        const res = await fetch(`${API_BASE}/api/conversations`);
+        const json = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(json.error || 'Failed to fetch conversations');
+        }
+
+        const list = json.data ?? [];
+        const normalized = list.map((item) => normalizeConversation({ ...item, messages: [] }));
+
+        if (cancelled) return;
+
+        setConversations(normalized);
+        setEscalationTickets(deriveEscalationTickets(normalized));
+        if (normalized.length > 0) {
+          setSelectedId(normalized[0].id);
+        }
+        setError(null);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message || 'Network error — could not reach the backend');
+          setConversations([]);
+          setEscalationTickets([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    fetchConversations();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const header = HEADER_COPY[activeNav] ?? HEADER_COPY.inbox;
   const pendingEscalations = escalationTickets.filter((t) => t.status === 'Pending').length;
+  const unreadCount = conversations.reduce((sum, c) => sum + (c.unread || 0), 0);
 
-  function handleSendMessage() {
+  async function handleSendMessage() {
     const trimmed = replyText.trim();
-    if (!trimmed) return;
+    if (!trimmed || !selectedId) return;
 
+    setSendError(null);
+
+    const optimisticId = `temp-${Date.now()}`;
     const newMessage = {
-      id: Date.now(),
+      id: optimisticId,
       from: 'system',
       text: trimmed,
       time: 'Just now',
@@ -925,6 +964,51 @@ export default function App() {
     );
 
     setReplyText('');
+
+    try {
+      const res = await fetch(`${API_BASE}/api/conversations/${selectedId}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: trimmed }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(json.error || 'Failed to send message');
+      }
+
+      if (json.data) {
+        const serverMessage = mapMessage(json.data);
+        setConversations((prev) =>
+          prev.map((convo) =>
+            convo.id === selectedId
+              ? {
+                  ...convo,
+                  messages: convo.messages.map((msg) =>
+                    msg.id === optimisticId ? serverMessage : msg
+                  ),
+                }
+              : convo
+          )
+        );
+      }
+    } catch (err) {
+      setConversations((prev) =>
+        prev.map((convo) => {
+          if (convo.id !== selectedId) return convo;
+          const remaining = convo.messages.filter((msg) => msg.id !== optimisticId);
+          const previousLast = remaining[remaining.length - 1]?.text ?? 'No messages yet';
+          return {
+            ...convo,
+            messages: remaining,
+            lastMessage: previousLast,
+          };
+        })
+      );
+      setReplyText(trimmed);
+      setSendError(err.message || 'Failed to send message. Please try again.');
+    }
   }
 
   function handleTakeOver(ticket) {
@@ -941,6 +1025,10 @@ export default function App() {
   function handleSaveSettings() {
     setSaveMessage('Settings saved successfully.');
     setTimeout(() => setSaveMessage(''), 3000);
+  }
+
+  if (isLoading) {
+    return <LoadingScreen />;
   }
 
   return (
@@ -964,8 +1052,14 @@ export default function App() {
             const isActive = activeNav === item.id;
             const badge =
               item.id === 'escalations'
-                ? String(pendingEscalations || item.badge)
-                : item.badge;
+                ? pendingEscalations > 0
+                  ? String(pendingEscalations)
+                  : null
+                : item.id === 'inbox'
+                  ? unreadCount > 0
+                    ? String(unreadCount)
+                    : null
+                  : item.badge;
 
             return (
               <button
@@ -1054,6 +1148,12 @@ export default function App() {
           </div>
         </header>
 
+        {error && (
+          <div className="shrink-0 border-b border-[#C9A227]/40 bg-black px-6 py-3 text-center text-sm text-[#C9A227]">
+            {error}
+          </div>
+        )}
+
         <main className="flex min-h-0 flex-1">
           {activeNav === 'inbox' && (
             <InboxView
@@ -1063,6 +1163,7 @@ export default function App() {
               replyText={replyText}
               setReplyText={setReplyText}
               handleSendMessage={handleSendMessage}
+              sendError={sendError}
             />
           )}
 
