@@ -104,14 +104,22 @@ app.get('/health', (_req, res) => {
 // ---------------------------------------------------------------------------
 // GET  /webhooks/whatsapp  — Meta verification handshake (no signature)
 // POST /webhooks/whatsapp  — inbound messages / status updates (with signature)
-app.get('/webhooks/whatsapp', (req, res, next) => {
-  webhookWhatsappRouter.handle(req, res, next);
+// Mount context is required so router.get('/') matches correctly
+app.use('/webhooks/whatsapp', (req, res, next) => {
+  if (req.method === 'GET') {
+    return webhookWhatsappRouter.handle(req, res, next);
+  }
+  next();
 });
 
 app.post(
   '/webhooks/whatsapp',
   validateWebhookSignature,
-  (req, res, next) => webhookWhatsappRouter.handle(req, res, next)
+  (req, res, next) => {
+    req.url = '/';
+    req.baseUrl = '/webhooks/whatsapp';
+    webhookWhatsappRouter.handle(req, res, next);
+  }
 );
 
 // ---------------------------------------------------------------------------

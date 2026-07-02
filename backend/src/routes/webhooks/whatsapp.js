@@ -25,20 +25,19 @@ router.get('/', (req, res) => {
   const token     = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  logger.info('Webhook verification request received', { mode, token });
-
-  if (mode !== 'subscribe') {
-    logger.warn('Webhook verification failed: unexpected mode', { mode });
-    return res.status(403).json({ error: 'Invalid hub.mode' });
+  if (!mode || !token || !challenge) {
+    logger.warn('Webhook verification failed: missing query parameters', { mode, token, challenge });
+    return res.status(400).send();
   }
 
-  if (token !== process.env.WEBHOOK_VERIFY_TOKEN) {
-    logger.warn('Webhook verification failed: token mismatch');
-    return res.status(403).json({ error: 'Verification token mismatch' });
+  logger.info('Webhook verification request received', { mode, token });
+
+  if (mode !== 'subscribe' || token !== process.env.WEBHOOK_VERIFY_TOKEN) {
+    logger.warn('Webhook verification failed', { mode, tokenMatch: token === process.env.WEBHOOK_VERIFY_TOKEN });
+    return res.status(403).send();
   }
 
   logger.info('Webhook verified successfully');
-  // Meta requires a plain-text 200 response containing only the challenge value
   return res.status(200).send(challenge);
 });
 
