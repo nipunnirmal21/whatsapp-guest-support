@@ -162,16 +162,73 @@ function normalizeEscalation(raw) {
   };
 }
 
-const ANALYTICS_CHART = [
-  { label: 'Mon', auto: 82, human: 18 },
-  { label: 'Tue', auto: 88, human: 12 },
-  { label: 'Wed', auto: 91, human: 9 },
-  { label: 'Thu', auto: 89, human: 11 },
-  { label: 'Fri', auto: 94, human: 6 },
-  { label: 'Sat', auto: 90, human: 10 },
-  { label: 'Sun', auto: 92, human: 8 },
-];
+function filterConversationsBySearch(conversations, searchQuery) {
+  const q = (searchQuery || '').trim().toLowerCase();
+  if (!q) return conversations;
 
+  return conversations.filter((c) => {
+    const guest = (c.guest || '').toLowerCase();
+    const phone = (c.phone || '').toLowerCase().replace(/\s/g, '');
+    const queryDigits = q.replace(/\s/g, '');
+    return guest.includes(q) || phone.includes(queryDigits);
+  });
+}
+
+function computeAnalytics(conversations, escalations) {
+  const totalBookings = conversations.length;
+  const activeStays = conversations.filter(
+    (c) => c.status === 'Checked In' || c.status === 'Confirmed'
+  ).length;
+  const openEscalations = escalations.filter(
+    (e) => e.status === 'Pending' || e.status === 'Acknowledged'
+  ).length;
+  const resolved = conversations.filter((c) => c.status === 'Resolved').length;
+  const escalated = conversations.filter((c) => c.status === 'Escalated').length;
+  const open = conversations.filter(
+    (c) => c.status !== 'Resolved' && c.status !== 'Escalated'
+  ).length;
+
+  const withAi = conversations.filter(
+    (c) => c.aiInsight && c.aiInsight !== '—'
+  ).length;
+  const safeReply = conversations.filter(
+    (c) => c.aiInsight === 'safe_reply'
+  ).length;
+  const aiResolutionRate =
+    totalBookings === 0 ? 0 : Math.round((safeReply / totalBookings) * 100);
+
+  const statusBars = [
+    {
+      label: 'Open',
+      count: open,
+      pct: totalBookings ? Math.round((open / totalBookings) * 100) : 0,
+    },
+    {
+      label: 'Resolved',
+      count: resolved,
+      pct: totalBookings ? Math.round((resolved / totalBookings) * 100) : 0,
+    },
+    {
+      label: 'Escalated',
+      count: escalated,
+      pct: totalBookings ? Math.round((escalated / totalBookings) * 100) : 0,
+    },
+    {
+      label: 'AI tagged',
+      count: withAi,
+      pct: totalBookings ? Math.round((withAi / totalBookings) * 100) : 0,
+    },
+  ];
+
+  return {
+    totalBookings,
+    activeStays,
+    openEscalations,
+    aiResolutionRate,
+    safeReply,
+    statusBars,
+  };
+}
 function IconInbox() {
   return (
     <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
@@ -413,8 +470,14 @@ function InboxView({
     return (
       <div className="flex min-w-0 flex-1 items-center justify-center bg-[#132B4F]">
         <div className="text-center">
-          <p className="text-sm font-medium text-white/60">No conversations yet</p>
-          <p className="mt-2 text-xs text-white/40">Guest messages will appear here when received via WhatsApp</p>
+          <p className="text-sm font-medium text-white/60">
+            {conversations.length === 0 ? 'No conversations yet' : 'No matching conversations'}
+          </p>
+          <p className="mt-2 text-xs text-white/40">
+            {conversations.length === 0
+              ? 'Guest messages will appear here when received via WhatsApp'
+              : 'Try a different guest name or phone number'}
+          </p>
         </div>
       </div>
     );
@@ -642,7 +705,9 @@ function ReservationsView({ conversations }) {
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-[#C9A227]">Serendib Vacation</p>
           <h3 className="mt-1 text-2xl font-bold text-white">All Bookings</h3>
-          <p className="mt-1 text-sm text-white/50">{conversations.length} conversations with reservation context</p>
+          <p className="mt-1 text-sm text-white/50">
+            {conversations.length} reservation{conversations.length !== 1 ? 's' : ''} shown
+          </p>
         </div>
         <div className="flex gap-3">
           <div className="rounded-xl border border-[#1E3A5F] bg-[#0B1F3A] px-4 py-3">
@@ -815,73 +880,65 @@ function EscalationsView({ tickets, loading, error, onTakeOver, onResolve, onVie
   );
 }
 
-function AnalyticsView() {
+function AnalyticsView({ conversations = [], escalations = [] }) {
+  const stats = computeAnalytics(conversations, escalations);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[#132B4F] p-6">
       <div className="mb-6">
         <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-[#C9A227]">Serendib Vacation</p>
         <h3 className="mt-1 text-2xl font-bold text-white">Performance Overview</h3>
-        <p className="mt-1 text-sm text-white/50">Last 7 days across all properties</p>
+        <p className="mt-1 text-sm text-white/50">Live metrics from current conversations & escalations</p>
       </div>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <div className="rounded-2xl border border-[#1E3A5F] bg-[#0B1F3A] p-6 shadow-xl">
           <p className="text-[10px] font-bold uppercase tracking-widest text-white/40">Total Bookings</p>
-          <p className="mt-3 text-3xl font-bold text-white">28</p>
-          <p className="mt-2 text-xs text-[#C9A227]">+4 vs last week</p>
+          <p className="mt-3 text-3xl font-bold text-white">{stats.totalBookings}</p>
+          <p className="mt-2 text-xs text-[#C9A227]">Conversations in inbox</p>
         </div>
         <div className="rounded-2xl border border-[#1E3A5F] bg-[#0B1F3A] p-6 shadow-xl">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-white/40">Avg Response Time</p>
-          <p className="mt-3 text-3xl font-bold text-white">2.4<span className="text-lg text-white/50"> min</span></p>
-          <p className="mt-2 text-xs text-[#C9A227]">−18% improvement</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-white/40">Active Stays</p>
+          <p className="mt-3 text-3xl font-bold text-white">{stats.activeStays}</p>
+          <p className="mt-2 text-xs text-[#C9A227]">Confirmed + checked in</p>
         </div>
         <div className="rounded-2xl border border-[#C9A227]/30 bg-black p-6 shadow-xl">
           <p className="text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">AI Resolution Rate</p>
-          <p className="mt-3 text-3xl font-bold text-[#C9A227]">92%</p>
-          <p className="mt-2 text-xs text-white/50">Rules engine + classifier</p>
+          <p className="mt-3 text-3xl font-bold text-[#C9A227]">{stats.aiResolutionRate}%</p>
+          <p className="mt-2 text-xs text-white/50">
+            {stats.safeReply} safe_reply · {stats.openEscalations} open escalations
+          </p>
         </div>
       </div>
 
       <div className="rounded-2xl border border-[#1E3A5F] bg-[#0B1F3A] p-6 shadow-2xl shadow-black/40">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h4 className="text-sm font-bold uppercase tracking-widest text-[#C9A227]">Message Volume</h4>
-            <p className="mt-1 text-xs text-white/50">Auto-resolved vs human-handled conversations</p>
-          </div>
-          <div className="flex gap-4 text-xs">
-            <span className="flex items-center gap-2 text-white/70">
-              <span className="h-2.5 w-2.5 rounded-full bg-[#C9A227]" />
-              AI Resolved
-            </span>
-            <span className="flex items-center gap-2 text-white/70">
-              <span className="h-2.5 w-2.5 rounded-full bg-[#1E3A5F]" />
-              Human Handled
-            </span>
+            <h4 className="text-sm font-bold uppercase tracking-widest text-[#C9A227]">Conversation Mix</h4>
+            <p className="mt-1 text-xs text-white/50">Status breakdown from live dashboard data</p>
           </div>
         </div>
 
         <div className="flex h-64 items-end justify-between gap-3 rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-6 pb-6 pt-8">
-          {ANALYTICS_CHART.map((day) => (
-            <div key={day.label} className="flex flex-1 flex-col items-center gap-2">
-              <div className="flex h-40 w-full items-end justify-center gap-1">
+          {stats.statusBars.map((bar) => (
+            <div key={bar.label} className="flex flex-1 flex-col items-center gap-2">
+              <span className="text-xs font-bold text-white">{bar.count}</span>
+              <div className="flex h-40 w-full items-end justify-center">
                 <div
-                  className="w-5 rounded-t-sm bg-[#C9A227] shadow-lg shadow-[#C9A227]/20"
-                  style={{ height: `${day.auto}%` }}
-                  title={`AI: ${day.auto}%`}
-                />
-                <div
-                  className="w-5 rounded-t-sm bg-[#1E3A5F]"
-                  style={{ height: `${day.human * 4}%` }}
-                  title={`Human: ${day.human}%`}
+                  className="w-8 rounded-t-sm bg-[#C9A227] shadow-lg shadow-[#C9A227]/20"
+                  style={{ height: `${Math.max(bar.pct, bar.count > 0 ? 8 : 0)}%` }}
+                  title={`${bar.label}: ${bar.count} (${bar.pct}%)`}
                 />
               </div>
-              <span className="text-[10px] font-medium uppercase tracking-wider text-white/40">{day.label}</span>
+              <span className="text-[10px] font-medium uppercase tracking-wider text-white/40">
+                {bar.label}
+              </span>
             </div>
           ))}
         </div>
 
         <p className="mt-4 text-center text-[10px] uppercase tracking-widest text-white/30">
-          Chart mockup · Connect backend analytics API for live data
+          Computed from live conversations · Updates with polling
         </p>
       </div>
     </div>
@@ -963,6 +1020,7 @@ export default function App() {
   const [actionBusyId, setActionBusyId] = useState(null);
   const [aiAutoReply, setAiAutoReply] = useState(true);
   const [saveMessage, setSaveMessage] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const loadConversations = useCallback(async () => {
     const json = await fetchWithAuth('/api/conversations');
@@ -978,6 +1036,28 @@ export default function App() {
     return (json.data ?? [])
       .map(normalizeEscalation)
       .filter((t) => t.rawStatus !== 'resolved');
+  }, []);
+
+  /** Merge list poll into state without wiping loaded message threads */
+  const mergeConversationList = useCallback((incoming) => {
+    setConversations((prev) => {
+      const prevById = new Map(prev.map((c) => [c.id, c]));
+      return incoming.map((c) => {
+        const existing = prevById.get(c.id);
+        if (existing?.messagesLoaded) {
+          return {
+            ...c,
+            messages: existing.messages,
+            messagesLoaded: true,
+            lastMessage:
+              existing.messages.length > 0
+                ? existing.messages[existing.messages.length - 1].text
+                : c.lastMessage,
+          };
+        }
+        return c;
+      });
+    });
   }, []);
 
   const refreshDashboard = useCallback(async () => {
@@ -1051,6 +1131,50 @@ export default function App() {
     };
   }, [selectedId]);
 
+  // Auto-poll conversations every 5s; also poll selected conversation detail
+  useEffect(() => {
+    let cancelled = false;
+
+    async function pollList() {
+      try {
+        const list = await loadConversations();
+        if (cancelled) return;
+        mergeConversationList(list);
+        setError(null);
+      } catch (err) {
+        if (!cancelled) {
+          // Keep UI usable; surface soft error without blanking data
+          setError(err.message || 'Polling failed — retrying…');
+        }
+      }
+    }
+
+    async function pollSelected() {
+      if (!selectedId) return;
+      try {
+        const json = await fetchWithAuth(`/api/conversations/${selectedId}`);
+        if (cancelled) return;
+        const detailed = normalizeConversation(json.data);
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === selectedId ? { ...detailed, messagesLoaded: true } : c
+          )
+        );
+      } catch {
+        // Ignore transient detail poll errors
+      }
+    }
+
+    const listInterval = setInterval(pollList, 5000);
+    const detailInterval = setInterval(pollSelected, 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(listInterval);
+      clearInterval(detailInterval);
+    };
+  }, [selectedId, loadConversations, mergeConversationList]);
+
   // Refresh escalations when opening that tab
   useEffect(() => {
     if (activeNav !== 'escalations') return undefined;
@@ -1079,6 +1203,7 @@ export default function App() {
   }, [activeNav, loadEscalations]);
 
   const header = HEADER_COPY[activeNav] ?? HEADER_COPY.inbox;
+  const filteredConversations = filterConversationsBySearch(conversations, searchQuery);
   const pendingEscalations = escalationTickets.filter((t) => t.status === 'Pending').length;
   const unreadCount = conversations.reduce((sum, c) => sum + (c.unread || 0), 0);
   const activeStays = conversations.filter(
@@ -1332,7 +1457,9 @@ export default function App() {
               </span>
               <input
                 type="text"
-                placeholder="Search guests, bookings..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search guests, phone..."
                 className="w-72 rounded-xl border border-[#1E3A5F] bg-[#132B4F] py-2 pl-10 pr-4 text-sm text-white placeholder-white/30 outline-none transition focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]"
               />
             </div>
@@ -1370,7 +1497,7 @@ export default function App() {
         <main className="flex min-h-0 flex-1">
           {activeNav === 'inbox' && (
             <InboxView
-              conversations={conversations}
+              conversations={filteredConversations}
               selectedId={selectedId}
               setSelectedId={setSelectedId}
               replyText={replyText}
@@ -1383,7 +1510,9 @@ export default function App() {
             />
           )}
 
-          {activeNav === 'reservations' && <ReservationsView conversations={conversations} />}
+          {activeNav === 'reservations' && (
+            <ReservationsView conversations={filteredConversations} />
+          )}
 
           {activeNav === 'escalations' && (
             <EscalationsView
@@ -1397,8 +1526,12 @@ export default function App() {
             />
           )}
 
-          {activeNav === 'analytics' && <AnalyticsView />}
-
+          {activeNav === 'analytics' && (
+            <AnalyticsView
+              conversations={conversations}
+              escalations={escalationTickets}
+            />
+          )}
           {activeNav === 'settings' && (
             <SettingsView
               aiAutoReply={aiAutoReply}
