@@ -1,6 +1,40 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
-const API_BASE = 'http://localhost:3000';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
+const DASHBOARD_API_KEY = import.meta.env.VITE_DASHBOARD_API_KEY || '';
+
+/**
+ * Central authenticated fetch for all dashboard API calls.
+ * Always sends X-API-Key from VITE_DASHBOARD_API_KEY.
+ */
+async function fetchWithAuth(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+
+  if (DASHBOARD_API_KEY) {
+    headers.set('X-API-Key', DASHBOARD_API_KEY);
+  }
+
+  if (options.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers,
+  });
+
+  const json = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    const message = json.error || json.message || `Request failed (${res.status})`;
+    const err = new Error(message);
+    err.status = res.status;
+    err.payload = json;
+    throw err;
+  }
+
+  return json;
+}
 
 const NAV_ITEMS = [
   { id: 'inbox', label: 'Inbox', badge: null },
@@ -51,11 +85,13 @@ function mapConversationStatus(convStatus, resStatus) {
 }
 
 function mapMessage(msg) {
-  let from = 'system';
+  let from = 'human';
   if (msg.direction === 'inbound' || msg.from === 'guest') {
     from = 'guest';
   } else if (msg.source === 'ai' || msg.from === 'ai') {
     from = 'ai';
+  } else if (msg.source === 'system' || msg.from === 'system') {
+    from = 'system';
   }
 
   return {
@@ -67,14 +103,10 @@ function mapMessage(msg) {
 }
 
 function normalizeConversation(raw) {
-  if (raw.guest && Array.isArray(raw.messages)) {
-    return raw;
-  }
-
   const reservation = raw.reservation ?? null;
   const guest = reservation?.guest ?? null;
   const apartment = reservation?.apartment ?? null;
-  const messages = (raw.messages ?? []).map(mapMessage);
+  const messages = Array.isArray(raw.messages) ? raw.messages.map(mapMessage) : [];
   const lastMsg = messages.length > 0 ? messages[messages.length - 1].text : '';
 
   return {
@@ -86,12 +118,15 @@ function normalizeConversation(raw) {
     checkIn: formatDate(reservation?.checkin_date),
     checkOut: formatDate(reservation?.checkout_date),
     status: mapConversationStatus(raw.status, reservation?.status),
+    rawStatus: raw.status ?? 'open',
     priority: raw.status === 'escalated' || raw.status === 'manual' ? 'escalated' : 'normal',
     lastMessage: lastMsg || raw.ai_draft || 'No messages yet',
     time: formatRelativeTime(raw.last_message_at ?? raw.created_at),
     unread: raw.unread ?? 0,
     aiInsight: raw.ai_classification ?? '—',
+    aiDraft: raw.ai_draft ?? null,
     messages,
+    messagesLoaded: Array.isArray(raw.messages),
     reservation: {
       guests: raw.guest_count ?? 1,
       nights: calculateNights(reservation?.checkin_date, reservation?.checkout_date),
@@ -102,20 +137,29 @@ function normalizeConversation(raw) {
   };
 }
 
-function deriveEscalationTickets(conversations) {
-  return conversations
-    .filter((c) => c.priority === 'escalated' || c.status === 'Escalated')
-    .map((c) => ({
-      id: `esc-${c.id}`,
-      conversationId: c.id,
-      guest: c.guest,
-      apartment: c.apartment,
-      title: c.aiInsight !== '—' ? c.aiInsight : 'Escalated conversation',
-      reason: c.aiInsight !== '—' ? c.aiInsight : 'Requires human handover',
-      severity: 'Normal',
-      time: c.time,
-      status: 'Pending',
-    }));
+function normalizeEscalation(raw) {
+  const conversation = raw.conversation ?? null;
+  const reservation = conversation?.reservation ?? null;
+  const guest = reservation?.guest ?? null;
+  const apartment = reservation?.apartment ?? null;
+  const statusMap = {
+    pending: 'Pending',
+    acknowledged: 'Acknowledged',
+    resolved: 'Resolved',
+  };
+
+  return {
+    id: raw.id,
+    conversationId: raw.conversation_id ?? conversation?.id ?? null,
+    guest: guest?.full_name ?? conversation?.guest_phone ?? 'Guest',
+    apartment: apartment?.name ?? '—',
+    title: conversation?.ai_classification || raw.reason || 'Escalated conversation',
+    reason: raw.reason || 'Requires human handover',
+    severity: /urgent|emergency|complaint/i.test(raw.reason || '') ? 'Urgent' : 'Normal',
+    time: formatRelativeTime(raw.created_at),
+    status: statusMap[raw.status] ?? 'Pending',
+    rawStatus: raw.status ?? 'pending',
+  };
 }
 
 const ANALYTICS_CHART = [
@@ -259,6 +303,7 @@ function MessageBubble({ message }) {
   const isGuest = message.from === 'guest';
   const isSystem = message.from === 'system';
   const isAi = message.from === 'ai';
+  const isHuman = message.from === 'human';
 
   if (isGuest) {
     return (
@@ -290,6 +335,18 @@ function MessageBubble({ message }) {
           <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">AI Draft</span>
           <p>{message.text}</p>
           <span className="mt-1 block text-[10px] text-[#0B1F3A]/40">{message.time}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (isHuman) {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[75%] rounded-2xl rounded-br-sm border border-[#C9A227]/30 bg-[#C9A227]/10 px-4 py-3 text-sm text-white shadow-lg">
+          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">Operator</span>
+          <p>{message.text}</p>
+          <span className="mt-1 block text-[10px] text-white/40">{message.time}</span>
         </div>
       </div>
     );
@@ -338,8 +395,19 @@ function LoadingScreen() {
   );
 }
 
-function InboxView({ conversations, selectedId, setSelectedId, replyText, setReplyText, handleSendMessage, sendError }) {
-  const selected = conversations.find((c) => c.id === selectedId) ?? conversations[0];
+function InboxView({
+  conversations,
+  selectedId,
+  setSelectedId,
+  replyText,
+  setReplyText,
+  handleSendMessage,
+  sendError,
+  messagesLoading,
+  onEscalate,
+  escalateBusy,
+}) {
+  const selected = conversations.find((c) => c.id === selectedId) ?? null;
 
   if (!selected) {
     return (
@@ -414,7 +482,9 @@ function InboxView({ conversations, selectedId, setSelectedId, replyText, setRep
               {selected.guest
                 .split(' ')
                 .map((n) => n[0])
-                .join('')}
+                .join('')
+                .slice(0, 2)
+                .toUpperCase() || '?'}
             </div>
             <div>
               <h3 className="text-base font-semibold text-white">{selected.guest}</h3>
@@ -423,12 +493,14 @@ function InboxView({ conversations, selectedId, setSelectedId, replyText, setRep
           </div>
           <div className="flex items-center gap-2">
             <StatusBadge status={selected.status} />
-            {selected.priority === 'escalated' && (
+            {selected.priority !== 'escalated' && (
               <button
                 type="button"
-                className="rounded-lg border border-[#C9A227] bg-[#C9A227] px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-[#0B1F3A] transition hover:bg-[#D4AF37]"
+                disabled={escalateBusy}
+                onClick={() => onEscalate(selected)}
+                className="rounded-lg border border-[#C9A227] bg-[#C9A227] px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-[#0B1F3A] transition hover:bg-[#D4AF37] disabled:opacity-50"
               >
-                Take Over
+                Escalate
               </button>
             )}
           </div>
@@ -437,15 +509,23 @@ function InboxView({ conversations, selectedId, setSelectedId, replyText, setRep
         <div className="flex-1 space-y-4 overflow-y-auto px-6 py-6">
           <div className="mx-auto max-w-2xl rounded-xl border border-[#1E3A5F] bg-[#0B1F3A]/50 px-4 py-2 text-center">
             <p className="text-[10px] font-medium uppercase tracking-widest text-white/40">
-              Today · {selected.apartment}
+              {selected.apartment}
             </p>
           </div>
 
-          {selected.messages.map((msg) => (
-            <div key={msg.id} className="mx-auto max-w-2xl">
-              <MessageBubble message={msg} />
+          {messagesLoading ? (
+            <div className="flex justify-center py-16">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#C9A227]/30 border-t-[#C9A227]" />
             </div>
-          ))}
+          ) : selected.messages.length === 0 ? (
+            <p className="py-12 text-center text-sm text-white/40">No messages in this conversation yet</p>
+          ) : (
+            selected.messages.map((msg) => (
+              <div key={msg.id} className="mx-auto max-w-2xl">
+                <MessageBubble message={msg} />
+              </div>
+            ))
+          )}
         </div>
 
         <div className="border-t border-[#1E3A5F] bg-[#0B1F3A] px-6 py-4">
@@ -526,23 +606,16 @@ function InboxView({ conversations, selectedId, setSelectedId, replyText, setRep
           <div className="mt-4 rounded-2xl border border-[#C9A227]/30 bg-[#C9A227]/5 p-5">
             <p className="text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">House Policy</p>
             <p className="mt-2 text-sm text-white/80">{selected.reservation.policy}</p>
-            <p className="mt-3 text-xs leading-relaxed text-white/50">
-              No smoking indoors. Quiet hours after 10 PM. Ayurveda retreat guests must observe meal timings.
-            </p>
           </div>
 
           <div className="mt-4 space-y-2">
             <button
               type="button"
-              className="w-full rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-4 py-3 text-left text-sm font-medium text-white transition hover:border-[#C9A227]/50"
+              disabled={escalateBusy || selected.priority === 'escalated'}
+              onClick={() => onEscalate(selected)}
+              className="w-full rounded-xl border border-[#C9A227]/40 bg-black px-4 py-3 text-left text-sm font-medium text-[#C9A227] transition hover:bg-[#C9A227] hover:text-[#0B1F3A] disabled:opacity-40"
             >
-              View Full Booking
-            </button>
-            <button
-              type="button"
-              className="w-full rounded-xl border border-[#C9A227]/40 bg-black px-4 py-3 text-left text-sm font-medium text-[#C9A227] transition hover:bg-[#C9A227] hover:text-[#0B1F3A]"
-            >
-              Escalate to Supervisor
+              {selected.priority === 'escalated' ? 'Already Escalated' : 'Escalate to Supervisor'}
             </button>
           </div>
 
@@ -552,9 +625,9 @@ function InboxView({ conversations, selectedId, setSelectedId, replyText, setRep
               Guest intent detected:{' '}
               <span className="font-medium text-[#C9A227]">{selected.aiInsight}</span>
             </p>
-            <p className="mt-2 text-xs text-white/40">
-              Suggested reply ready. Rules engine could auto-resolve if policy data is complete.
-            </p>
+            {selected.aiDraft && (
+              <p className="mt-2 text-xs text-white/40">Draft: {selected.aiDraft}</p>
+            )}
           </div>
         </div>
       </aside>
@@ -569,7 +642,7 @@ function ReservationsView({ conversations }) {
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-[#C9A227]">Serendib Vacation</p>
           <h3 className="mt-1 text-2xl font-bold text-white">All Bookings</h3>
-          <p className="mt-1 text-sm text-white/50">{conversations.length} reservations across 3 properties</p>
+          <p className="mt-1 text-sm text-white/50">{conversations.length} conversations with reservation context</p>
         </div>
         <div className="flex gap-3">
           <div className="rounded-xl border border-[#1E3A5F] bg-[#0B1F3A] px-4 py-3">
@@ -642,7 +715,7 @@ function ReservationsView({ conversations }) {
   );
 }
 
-function EscalationsView({ tickets, onTakeOver }) {
+function EscalationsView({ tickets, loading, error, onTakeOver, onResolve, onViewConversation, actionBusyId }) {
   const pendingCount = tickets.filter((t) => t.status === 'Pending').length;
 
   return (
@@ -661,57 +734,83 @@ function EscalationsView({ tickets, onTakeOver }) {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
-        {tickets.map((ticket) => (
-          <div
-            key={ticket.id}
-            className={`rounded-2xl border bg-[#0B1F3A] p-6 shadow-xl transition ${
-              ticket.status === 'Acknowledged'
-                ? 'border-white/20 opacity-70'
-                : 'border-[#1E3A5F] hover:border-[#C9A227]/40'
-            }`}
-          >
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h4 className="text-base font-bold text-white">{ticket.title}</h4>
-                  <SeverityBadge severity={ticket.severity} />
-                  <StatusBadge status={ticket.status} />
-                </div>
-                <p className="mt-2 text-sm text-[#C9A227]/90">
-                  {ticket.guest} · {ticket.apartment}
-                </p>
-                <p className="mt-3 text-sm leading-relaxed text-white/60">{ticket.reason}</p>
-                <p className="mt-3 text-[10px] uppercase tracking-widest text-white/30">
-                  Escalated {ticket.time}
-                </p>
-              </div>
+      {error && (
+        <div className="mb-4 rounded-xl border border-[#C9A227]/40 bg-black px-4 py-3 text-sm text-[#C9A227]">
+          {error}
+        </div>
+      )}
 
-              <div className="flex shrink-0 flex-col gap-2">
-                {ticket.status === 'Pending' ? (
+      {loading ? (
+        <div className="flex flex-1 items-center justify-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#C9A227]/30 border-t-[#C9A227]" />
+        </div>
+      ) : tickets.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center rounded-2xl border border-[#1E3A5F] bg-[#0B1F3A]">
+          <p className="text-sm text-white/50">No open escalations</p>
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+          {tickets.map((ticket) => (
+            <div
+              key={ticket.id}
+              className={`rounded-2xl border bg-[#0B1F3A] p-6 shadow-xl transition ${
+                ticket.status === 'Acknowledged'
+                  ? 'border-white/20 opacity-70'
+                  : 'border-[#1E3A5F] hover:border-[#C9A227]/40'
+              }`}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="text-base font-bold text-white">{ticket.title}</h4>
+                    <SeverityBadge severity={ticket.severity} />
+                    <StatusBadge status={ticket.status} />
+                  </div>
+                  <p className="mt-2 text-sm text-[#C9A227]/90">
+                    {ticket.guest} · {ticket.apartment}
+                  </p>
+                  <p className="mt-3 text-sm leading-relaxed text-white/60">{ticket.reason}</p>
+                  <p className="mt-3 text-[10px] uppercase tracking-widest text-white/30">
+                    Escalated {ticket.time}
+                  </p>
+                </div>
+
+                <div className="flex shrink-0 flex-col gap-2">
+                  {ticket.status === 'Pending' ? (
+                    <button
+                      type="button"
+                      disabled={actionBusyId === ticket.id}
+                      onClick={() => onTakeOver(ticket)}
+                      className="rounded-xl border border-[#C9A227] bg-[#C9A227] px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37] disabled:opacity-50"
+                    >
+                      Take Over
+                    </button>
+                  ) : (
+                    <span className="rounded-xl border border-white/20 bg-[#132B4F] px-5 py-2.5 text-center text-xs font-bold uppercase tracking-wide text-white/50">
+                      Assigned to You
+                    </span>
+                  )}
                   <button
                     type="button"
-                    onClick={() => onTakeOver(ticket)}
-                    className="rounded-xl border border-[#C9A227] bg-[#C9A227] px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37]"
+                    disabled={actionBusyId === ticket.id || ticket.status === 'Resolved'}
+                    onClick={() => onResolve(ticket)}
+                    className="rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-5 py-2.5 text-xs font-medium text-white/70 transition hover:border-[#C9A227]/30 hover:text-white disabled:opacity-40"
                   >
-                    Take Over
+                    Resolve
                   </button>
-                ) : (
-                  <span className="rounded-xl border border-white/20 bg-[#132B4F] px-5 py-2.5 text-center text-xs font-bold uppercase tracking-wide text-white/50">
-                    Assigned to You
-                  </span>
-                )}
-                <button
-                  type="button"
-                  className="rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-5 py-2.5 text-xs font-medium text-white/70 transition hover:border-[#C9A227]/30 hover:text-white"
-                >
-                  View Conversation
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => onViewConversation(ticket)}
+                    className="rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-5 py-2.5 text-xs font-medium text-white/70 transition hover:border-[#C9A227]/30 hover:text-white"
+                  >
+                    View Conversation
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -792,10 +891,6 @@ function AnalyticsView() {
 function SettingsView({
   aiAutoReply,
   setAiAutoReply,
-  webhookToken,
-  setWebhookToken,
-  openaiKey,
-  setOpenaiKey,
   onSave,
   saveMessage,
 }) {
@@ -804,9 +899,9 @@ function SettingsView({
       <div className="mx-auto w-full max-w-2xl">
         <div className="mb-8">
           <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-[#C9A227]">Configuration</p>
-          <h3 className="mt-1 text-2xl font-bold text-white">Integration Settings</h3>
+          <h3 className="mt-1 text-2xl font-bold text-white">Operator Preferences</h3>
           <p className="mt-1 text-sm text-white/50">
-            Manage WhatsApp webhooks and AI automation for Serendib Vacation
+            Dashboard preferences for Serendib Vacation guest support. Secrets stay on the server.
           </p>
         </div>
 
@@ -821,52 +916,29 @@ function SettingsView({
             />
           </section>
 
-          <section>
-            <h4 className="mb-3 text-xs font-bold uppercase tracking-widest text-[#C9A227]">WhatsApp Webhook</h4>
-            <label className="block">
-              <span className="mb-2 block text-sm font-medium text-white">Webhook Verification Token</span>
-              <input
-                type="text"
-                value={webhookToken}
-                onChange={(e) => setWebhookToken(e.target.value)}
-                placeholder="Enter WEBHOOK_VERIFY_TOKEN"
-                className="w-full rounded-xl border border-[#1E3A5F] bg-[#0B1F3A] px-4 py-3 text-sm text-white placeholder-white/30 outline-none transition focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]"
-              />
-              <span className="mt-2 block text-xs text-white/40">
-                Must match the verify token configured in Meta Developer Console.
-              </span>
-            </label>
-          </section>
-
-          <section>
-            <h4 className="mb-3 text-xs font-bold uppercase tracking-widest text-[#C9A227]">OpenAI</h4>
-            <label className="block">
-              <span className="mb-2 block text-sm font-medium text-white">OpenAI API Key</span>
-              <input
-                type="password"
-                value={openaiKey}
-                onChange={(e) => setOpenaiKey(e.target.value)}
-                placeholder="sk-..."
-                className="w-full rounded-xl border border-[#1E3A5F] bg-[#0B1F3A] px-4 py-3 text-sm text-white placeholder-white/30 outline-none transition focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]"
-              />
-              <span className="mt-2 block text-xs text-white/40">
-                Used by classifyAndDraft for unhandled guest messages. Stored server-side only in production.
-              </span>
-            </label>
+          <section className="rounded-xl border border-[#1E3A5F] bg-[#0B1F3A]/60 p-4">
+            <h4 className="mb-2 text-xs font-bold uppercase tracking-widest text-[#C9A227]">
+              Server secrets
+            </h4>
+            <p className="text-sm leading-relaxed text-white/50">
+              Webhook verification tokens, Meta app secrets, OpenAI keys, and database credentials are
+              configured only in the backend <code className="text-white/70">.env</code> file. This
+              dashboard never collects or displays those values.
+            </p>
           </section>
 
           <div className="flex items-center justify-between border-t border-[#1E3A5F] pt-6">
             {saveMessage ? (
               <p className="text-sm font-medium text-[#C9A227]">{saveMessage}</p>
             ) : (
-              <p className="text-xs text-white/40">Changes apply to the backend .env on save.</p>
+              <p className="text-xs text-white/40">Preferences are stored in this browser session only.</p>
             )}
             <button
               type="button"
               onClick={onSave}
               className="rounded-xl bg-[#C9A227] px-6 py-3 text-sm font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37]"
             >
-              Save Settings
+              Save Preferences
             </button>
           </div>
         </div>
@@ -882,36 +954,51 @@ export default function App() {
   const [replyText, setReplyText] = useState('');
   const [escalationTickets, setEscalationTickets] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [escalationsLoading, setEscalationsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [escalationsError, setEscalationsError] = useState(null);
   const [sendError, setSendError] = useState(null);
+  const [escalateBusy, setEscalateBusy] = useState(false);
+  const [actionBusyId, setActionBusyId] = useState(null);
   const [aiAutoReply, setAiAutoReply] = useState(true);
-  const [webhookToken, setWebhookToken] = useState('serendib_webhook_2026');
-  const [openaiKey, setOpenaiKey] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
 
+  const loadConversations = useCallback(async () => {
+    const json = await fetchWithAuth('/api/conversations');
+    const list = (json.data ?? []).map((item) =>
+      normalizeConversation({ ...item, messages: item.messages ?? undefined })
+    );
+    // List endpoint has no messages — mark as not loaded
+    return list.map((c) => ({ ...c, messages: [], messagesLoaded: false }));
+  }, []);
+
+  const loadEscalations = useCallback(async () => {
+    const json = await fetchWithAuth('/api/escalations');
+    return (json.data ?? [])
+      .map(normalizeEscalation)
+      .filter((t) => t.rawStatus !== 'resolved');
+  }, []);
+
+  const refreshDashboard = useCallback(async () => {
+    const [convos, tickets] = await Promise.all([loadConversations(), loadEscalations()]);
+    setConversations(convos);
+    setEscalationTickets(tickets);
+    return convos;
+  }, [loadConversations, loadEscalations]);
+
+  // Initial load
   useEffect(() => {
     let cancelled = false;
 
-    async function fetchConversations() {
+    async function init() {
       try {
-        const res = await fetch(`${API_BASE}/api/conversations`);
-        const json = await res.json().catch(() => ({}));
-
-        if (!res.ok) {
-          throw new Error(json.error || 'Failed to fetch conversations');
-        }
-
-        const list = json.data ?? [];
-        const normalized = list.map((item) => normalizeConversation({ ...item, messages: [] }));
-
+        const convos = await refreshDashboard();
         if (cancelled) return;
-
-        setConversations(normalized);
-        setEscalationTickets(deriveEscalationTickets(normalized));
-        if (normalized.length > 0) {
-          setSelectedId(normalized[0].id);
-        }
         setError(null);
+        if (convos.length > 0) {
+          setSelectedId((prev) => prev ?? convos[0].id);
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err.message || 'Network error — could not reach the backend');
@@ -919,33 +1006,101 @@ export default function App() {
           setEscalationTickets([]);
         }
       } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
+        if (!cancelled) setIsLoading(false);
       }
     }
 
-    fetchConversations();
-
+    init();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshDashboard]);
+
+  // Load full conversation (messages + reservation) when selection changes
+  useEffect(() => {
+    if (!selectedId) return undefined;
+
+    let cancelled = false;
+
+    async function loadDetail() {
+      setMessagesLoading(true);
+      setSendError(null);
+      try {
+        const json = await fetchWithAuth(`/api/conversations/${selectedId}`);
+        if (cancelled) return;
+        const detailed = normalizeConversation(json.data);
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === selectedId
+              ? { ...detailed, messagesLoaded: true }
+              : c
+          )
+        );
+      } catch (err) {
+        if (!cancelled) {
+          setSendError(err.message || 'Failed to load conversation messages');
+        }
+      } finally {
+        if (!cancelled) setMessagesLoading(false);
+      }
+    }
+
+    loadDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
+  // Refresh escalations when opening that tab
+  useEffect(() => {
+    if (activeNav !== 'escalations') return undefined;
+
+    let cancelled = false;
+
+    async function load() {
+      setEscalationsLoading(true);
+      setEscalationsError(null);
+      try {
+        const tickets = await loadEscalations();
+        if (!cancelled) setEscalationTickets(tickets);
+      } catch (err) {
+        if (!cancelled) {
+          setEscalationsError(err.message || 'Failed to load escalations');
+        }
+      } finally {
+        if (!cancelled) setEscalationsLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeNav, loadEscalations]);
 
   const header = HEADER_COPY[activeNav] ?? HEADER_COPY.inbox;
   const pendingEscalations = escalationTickets.filter((t) => t.status === 'Pending').length;
   const unreadCount = conversations.reduce((sum, c) => sum + (c.unread || 0), 0);
+  const activeStays = conversations.filter(
+    (c) => c.status === 'Checked In' || c.status === 'Confirmed'
+  ).length;
 
   async function handleSendMessage() {
     const trimmed = replyText.trim();
     if (!trimmed || !selectedId) return;
+
+    const selected = conversations.find((c) => c.id === selectedId);
+    if (!selected?.phone) {
+      setSendError('Cannot send — guest phone number is missing');
+      return;
+    }
 
     setSendError(null);
 
     const optimisticId = `temp-${Date.now()}`;
     const newMessage = {
       id: optimisticId,
-      from: 'system',
+      from: 'human',
       text: trimmed,
       time: 'Just now',
     };
@@ -962,21 +1117,15 @@ export default function App() {
           : convo
       )
     );
-
     setReplyText('');
 
     try {
-      const res = await fetch(`${API_BASE}/api/conversations/${selectedId}/reply`, {
+      // Persist + send WhatsApp via conversation reply endpoint
+      // (POST /api/messages/send only dispatches WhatsApp and does not save to DB)
+      const json = await fetchWithAuth(`/api/conversations/${selectedId}/reply`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: trimmed }),
       });
-
-      const json = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        throw new Error(json.error || 'Failed to send message');
-      }
 
       if (json.data) {
         const serverMessage = mapMessage(json.data);
@@ -1011,11 +1160,73 @@ export default function App() {
     }
   }
 
+  async function handleEscalate(conversation) {
+    if (!conversation?.id || escalateBusy) return;
+    setEscalateBusy(true);
+    setSendError(null);
+    try {
+      await fetchWithAuth('/api/escalations/create', {
+        method: 'POST',
+        body: JSON.stringify({
+          conversationId: conversation.id,
+          reason: conversation.aiInsight !== '—'
+            ? `Operator escalate: ${conversation.aiInsight}`
+            : 'Operator requested supervisor handover',
+        }),
+      });
+
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === conversation.id
+            ? { ...c, status: 'Escalated', priority: 'escalated', rawStatus: 'escalated' }
+            : c
+        )
+      );
+
+      const tickets = await loadEscalations();
+      setEscalationTickets(tickets);
+    } catch (err) {
+      setSendError(err.message || 'Failed to escalate conversation');
+    } finally {
+      setEscalateBusy(false);
+    }
+  }
+
   function handleTakeOver(ticket) {
     setEscalationTickets((prev) =>
       prev.map((t) => (t.id === ticket.id ? { ...t, status: 'Acknowledged' } : t))
     );
+    if (ticket.conversationId) {
+      setSelectedId(ticket.conversationId);
+      setActiveNav('inbox');
+    }
+  }
 
+  async function handleResolve(ticket) {
+    if (!ticket.conversationId) return;
+    setActionBusyId(ticket.id);
+    setEscalationsError(null);
+    try {
+      await fetchWithAuth('/api/escalations/resolve', {
+        method: 'POST',
+        body: JSON.stringify({ conversationId: ticket.conversationId }),
+      });
+      setEscalationTickets((prev) => prev.filter((t) => t.id !== ticket.id));
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === ticket.conversationId
+            ? { ...c, status: 'Resolved', priority: 'normal', rawStatus: 'resolved' }
+            : c
+        )
+      );
+    } catch (err) {
+      setEscalationsError(err.message || 'Failed to resolve escalation');
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
+  function handleViewConversation(ticket) {
     if (ticket.conversationId) {
       setSelectedId(ticket.conversationId);
       setActiveNav('inbox');
@@ -1023,7 +1234,7 @@ export default function App() {
   }
 
   function handleSaveSettings() {
-    setSaveMessage('Settings saved successfully.');
+    setSaveMessage('Preferences saved.');
     setTimeout(() => setSaveMessage(''), 3000);
   }
 
@@ -1095,12 +1306,12 @@ export default function App() {
             <p className="text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">Live Stats</p>
             <div className="mt-3 grid grid-cols-2 gap-3">
               <div>
-                <p className="text-xl font-bold text-white">6</p>
+                <p className="text-xl font-bold text-white">{activeStays}</p>
                 <p className="text-[10px] text-white/50">Active Stays</p>
               </div>
               <div>
-                <p className="text-xl font-bold text-[#C9A227]">92%</p>
-                <p className="text-[10px] text-white/50">Auto-Resolved</p>
+                <p className="text-xl font-bold text-[#C9A227]">{pendingEscalations}</p>
+                <p className="text-[10px] text-white/50">Open Escalations</p>
               </div>
             </div>
           </div>
@@ -1131,9 +1342,11 @@ export default function App() {
               className="relative rounded-xl border border-[#1E3A5F] bg-[#132B4F] p-2.5 text-white/70 transition hover:border-[#C9A227]/50 hover:text-[#C9A227]"
             >
               <IconBell />
-              <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#C9A227] text-[9px] font-bold text-[#0B1F3A]">
-                {pendingEscalations || 1}
-              </span>
+              {pendingEscalations > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#C9A227] text-[9px] font-bold text-[#0B1F3A]">
+                  {pendingEscalations}
+                </span>
+              )}
             </button>
 
             <div className="flex items-center gap-3 rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-3 py-2">
@@ -1164,13 +1377,24 @@ export default function App() {
               setReplyText={setReplyText}
               handleSendMessage={handleSendMessage}
               sendError={sendError}
+              messagesLoading={messagesLoading}
+              onEscalate={handleEscalate}
+              escalateBusy={escalateBusy}
             />
           )}
 
           {activeNav === 'reservations' && <ReservationsView conversations={conversations} />}
 
           {activeNav === 'escalations' && (
-            <EscalationsView tickets={escalationTickets} onTakeOver={handleTakeOver} />
+            <EscalationsView
+              tickets={escalationTickets}
+              loading={escalationsLoading}
+              error={escalationsError}
+              onTakeOver={handleTakeOver}
+              onResolve={handleResolve}
+              onViewConversation={handleViewConversation}
+              actionBusyId={actionBusyId}
+            />
           )}
 
           {activeNav === 'analytics' && <AnalyticsView />}
@@ -1179,10 +1403,6 @@ export default function App() {
             <SettingsView
               aiAutoReply={aiAutoReply}
               setAiAutoReply={setAiAutoReply}
-              webhookToken={webhookToken}
-              setWebhookToken={setWebhookToken}
-              openaiKey={openaiKey}
-              setOpenaiKey={setOpenaiKey}
               onSave={handleSaveSettings}
               saveMessage={saveMessage}
             />

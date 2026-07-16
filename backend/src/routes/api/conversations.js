@@ -14,12 +14,38 @@ function isValidUuid(value) {
 /**
  * GET /api/conversations
  * Returns the conversation list for the dashboard, newest activity first.
+ * Includes nested reservation / guest / apartment for inbox + reservations views.
  */
 router.get('/', async (req, res, next) => {
   try {
     const { data, error } = await supabase
       .from('conversations')
-      .select('*')
+      .select(
+        `
+        *,
+        reservation:reservations (
+          id,
+          booking_source,
+          booking_id,
+          checkin_date,
+          checkout_date,
+          status,
+          guest:guests (
+            id,
+            full_name,
+            phone_number,
+            email
+          ),
+          apartment:apartments (
+            id,
+            name,
+            code,
+            address,
+            map_link
+          )
+        )
+      `
+      )
       .order('last_message_at', { ascending: false, nullsFirst: false });
 
     if (error) {

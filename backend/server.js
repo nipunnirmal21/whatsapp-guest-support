@@ -15,6 +15,7 @@ const REQUIRED_ENV = [
   'META_APP_SECRET',
   'SUPABASE_URL',
   'SUPABASE_SERVICE_ROLE_KEY',
+  'DASHBOARD_API_KEY',
 ];
 
 const missing = REQUIRED_ENV.filter((key) => !process.env[key]);

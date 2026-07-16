@@ -8,7 +8,9 @@ const rateLimit  = require('express-rate-limit');
 
 const logger                     = require('./utils/logger');
 const errorHandler               = require('./middleware/errorHandler');
+const requireDashboardAuth       = require('./middleware/auth');
 const validateWebhookSignature   = require('./middleware/validateWebhookSignature');
+const supabase                   = require('./db/client');
 
 // Route modules
 const webhookWhatsappRouter  = require('./routes/webhooks/whatsapp');
@@ -88,15 +90,43 @@ const sendLimiter = rateLimit({
 app.use('/api/messages/send', sendLimiter);
 
 // ---------------------------------------------------------------------------
-// Health endpoint  —  Phase 2 requirement
+// Health endpoint — verifies process + database reachability
 // ---------------------------------------------------------------------------
-app.get('/health', (_req, res) => {
-  res.status(200).json({
-    status: 'ok',
+app.get('/health', async (_req, res) => {
+  const payload = {
     service: 'whatsapp-guest-support',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
-  });
+  };
+
+  try {
+    // Lightweight round-trip to confirm Supabase / Postgres is reachable
+    const { error } = await supabase
+      .from('conversations')
+      .select('id')
+      .limit(1);
+
+    if (error) {
+      throw error;
+    }
+
+    return res.status(200).json({
+      ...payload,
+      status: 'ok',
+      database: 'connected',
+    });
+  } catch (err) {
+    logger.error('Health check failed — database unreachable', {
+      message: err.message,
+    });
+
+    return res.status(503).json({
+      ...payload,
+      status: 'degraded',
+      database: 'unreachable',
+      error: err.message,
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -123,8 +153,9 @@ app.post(
 );
 
 // ---------------------------------------------------------------------------
-// API routes
+// API routes (dashboard) — require API key; webhooks stay unauthenticated
 // ---------------------------------------------------------------------------
+app.use('/api', requireDashboardAuth);
 app.use('/api/messages',      messagesRouter);
 app.use('/api/conversations', conversationsRouter);
 app.use('/api/escalations',   escalationsRouter);

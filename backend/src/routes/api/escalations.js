@@ -11,6 +11,63 @@ function isValidUuid(value) {
 }
 
 /**
+ * GET /api/escalations
+ * Lists escalations for the dashboard (newest first).
+ * Optional query: ?status=pending|acknowledged|resolved
+ */
+router.get('/', async (req, res, next) => {
+  try {
+    const { status } = req.query;
+
+    let query = supabase
+      .from('escalations')
+      .select(
+        `
+        *,
+        conversation:conversations (
+          id,
+          guest_phone,
+          status,
+          ai_classification,
+          ai_draft,
+          last_message_at,
+          reservation:reservations (
+            booking_id,
+            status,
+            guest:guests (
+              full_name,
+              phone_number
+            ),
+            apartment:apartments (
+              name,
+              code
+            )
+          )
+        )
+      `
+      )
+      .order('created_at', { ascending: false });
+
+    if (status && typeof status === 'string') {
+      query = query.eq('status', status.trim().toLowerCase());
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      logger.error('Failed to list escalations', { error: error.message });
+      const err = new Error('Failed to fetch escalations');
+      err.status = 500;
+      throw err;
+    }
+
+    return res.status(200).json({ success: true, data: data ?? [] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * POST /api/escalations/create
  * Marks a conversation for human handover and records the escalation.
  *

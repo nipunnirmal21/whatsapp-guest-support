@@ -1,6 +1,7 @@
 -- =============================================================================
 -- Migration 001 – Initial schema
--- Run against your Supabase project via the SQL editor or supabase CLI.
+-- Run against your Supabase project via: npm run migrate
+-- (or paste into the Supabase SQL editor)
 -- =============================================================================
 
 -- Raw webhook events (Phase 2 – audit log)
@@ -69,6 +70,15 @@ CREATE TABLE IF NOT EXISTS reservations (
 CREATE INDEX IF NOT EXISTS idx_reservations_guest_id      ON reservations(guest_id);
 CREATE INDEX IF NOT EXISTS idx_reservations_checkin_date  ON reservations(checkin_date);
 
+-- Admin / dashboard users (must exist BEFORE conversations / escalations FKs)
+CREATE TABLE IF NOT EXISTS admin_users (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name       TEXT NOT NULL,
+  email      TEXT UNIQUE NOT NULL,
+  role       TEXT NOT NULL DEFAULT 'operator',  -- operator | supervisor | admin
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Conversations (one active thread per guest/reservation pair)
 CREATE TABLE IF NOT EXISTS conversations (
   id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -116,13 +126,4 @@ CREATE TABLE IF NOT EXISTS escalations (
   escalated_to    UUID REFERENCES admin_users(id),
   status          TEXT NOT NULL DEFAULT 'pending',  -- pending | acknowledged | resolved
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Admin / dashboard users
-CREATE TABLE IF NOT EXISTS admin_users (
-  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name       TEXT NOT NULL,
-  email      TEXT UNIQUE NOT NULL,
-  role       TEXT NOT NULL DEFAULT 'operator',  -- operator | supervisor | admin
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
