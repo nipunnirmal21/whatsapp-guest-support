@@ -1,16 +1,49 @@
-# React + Vite
+# WhatsApp Guest Support Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React/Vite dashboard for the WhatsApp Guest Support backend. It displays conversations, reservations, delivery states, escalations, automation settings, and operator handover controls.
 
-Currently, two official plugins are available:
+## Setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```powershell
+Copy-Item .env.example .env
+npm.cmd ci
+npm.cmd run dev
+```
 
-## React Compiler
+The development server prints its local URL, normally `http://localhost:5173`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Environment variables
 
-## Expanding the ESLint configuration
+| Variable | Required | Purpose |
+|---|---:|---|
+| `VITE_API_BASE_URL` | Yes | Backend base URL, for example `http://localhost:3000` |
+| `VITE_DASHBOARD_API_KEY` | Yes | Value sent as `X-API-Key` to dashboard APIs |
+| `VITE_ADMIN_USER_ID` | For operator actions | Existing `admin_users.id` sent as `X-Admin-User-Id` |
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Restart the Vite development server after changing environment variables.
+
+## Dashboard capabilities
+
+- List conversations and view message history
+- Display linked guest, reservation, and apartment context
+- Show outbound WhatsApp delivery status
+- Create, view, Take Over, and resolve escalations
+- Assign conversations and start/resume manual mode
+- Send human replies
+- Read and update AI auto-reply settings
+
+## Commands
+
+```powershell
+npm.cmd run dev
+npm.cmd run lint
+npm.cmd test
+npm.cmd run build
+npm.cmd run preview
+```
+
+## Authentication warning
+
+Vite exposes `VITE_*` values to browser JavaScript. The current shared API key and configured admin UUID are suitable for controlled development environments, not public authentication. Add a real user login/session system and backend authorization before exposing the dashboard to untrusted users.
+
+For backend setup and API details, see the repository [README](../README.md) and [API Reference](../docs/API.md).

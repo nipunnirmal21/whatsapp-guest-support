@@ -1,28 +1,33 @@
+const js = require('@eslint/js');
+const globals = require('globals');
+
 module.exports = [
   {
-    ignores: ['node_modules/**', 'logs/**'],
+    ignores: [
+      'node_modules/**',
+      'logs/**',
+      'coverage/**',
+      'scripts/manual_migrations_for_supabase.sql',
+    ],
   },
+  js.configs.recommended,
   {
     files: ['**/*.js'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'commonjs',
       globals: {
-        Buffer: 'readonly',
-        __dirname: 'readonly',
-        clearInterval: 'readonly',
-        console: 'readonly',
-        module: 'readonly',
-        process: 'readonly',
-        require: 'readonly',
-        setInterval: 'readonly',
-        setTimeout: 'readonly',
+        ...globals.node,
+        ...globals.commonjs,
       },
     },
     rules: {
-      'no-undef': 'error',
-      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       eqeqeq: ['error', 'always'],
+      'no-promise-executor-return': 'error',
+      'no-unreachable-loop': 'error',
+      'no-unsafe-optional-chaining': 'error',
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      'prefer-const': 'error',
     },
   },
 ];
