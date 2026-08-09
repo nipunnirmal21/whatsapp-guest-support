@@ -1,3 +1,11 @@
+const ESCALATION_ERROR_STATUS = Object.freeze({
+  P0002: 404,
+  P0001: 409,
+  '22023': 400,
+  '23503': 400,
+  '23505': 409,
+});
+
 function createEscalationService({ runEnsureEscalation, logger }) {
   async function ensureEscalation({ conversationId, reason, escalatedTo = null }) {
     const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
@@ -41,7 +49,7 @@ function getDefaultService() {
 
       if (error) {
         const serviceError = new Error(`Failed to escalate conversation: ${error.message}`);
-        serviceError.status = error.code === 'P0002' ? 404 : 500;
+        serviceError.status = ESCALATION_ERROR_STATUS[error.code] || 500;
         serviceError.code = error.code;
         throw serviceError;
       }
@@ -63,6 +71,7 @@ function getDefaultService() {
 }
 
 module.exports = {
+  ESCALATION_ERROR_STATUS,
   createEscalationService,
   ensureEscalation: (...args) => getDefaultService().ensureEscalation(...args),
 };

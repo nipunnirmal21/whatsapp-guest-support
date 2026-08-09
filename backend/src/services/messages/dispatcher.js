@@ -1,4 +1,11 @@
 const MAX_FAILURE_REASON_LENGTH = 1000;
+const MAX_STATUS_JSON_LENGTH = 16000;
+const WHATSAPP_DELIVERY_STATUSES = new Set([
+  'sent',
+  'delivered',
+  'read',
+  'failed',
+]);
 
 function serialiseFailureReason(error) {
   const detail = error?.response?.data ?? error?.message ?? error;
@@ -14,6 +21,69 @@ function serialiseFailureReason(error) {
     0,
     MAX_FAILURE_REASON_LENGTH
   );
+}
+
+function normaliseProviderTimestamp(value) {
+  if (value === null || value === undefined || value === '') return null;
+
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return null;
+
+  const milliseconds = numericValue > 1e12 ? numericValue : numericValue * 1000;
+  const date = new Date(milliseconds);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function toSafeJson(value) {
+  if (value === null || value === undefined) return null;
+
+  try {
+    const json = JSON.stringify(value);
+    if (json.length <= MAX_STATUS_JSON_LENGTH) return JSON.parse(json);
+    return {
+      truncated: true,
+      summary: json.slice(0, MAX_STATUS_JSON_LENGTH),
+    };
+  } catch {
+    return { summary: String(value).slice(0, MAX_STATUS_JSON_LENGTH) };
+  }
+}
+
+function extractFailureMetadata(statusEvent) {
+  if (statusEvent?.status !== 'failed') {
+    return { failureCode: null, failureReason: null, failureDetails: null };
+  }
+
+  const errors = Array.isArray(statusEvent.errors)
+    ? statusEvent.errors
+    : statusEvent.errors
+      ? [statusEvent.errors]
+      : [];
+  const primaryError = errors[0] ?? null;
+
+  return {
+    failureCode:
+      primaryError?.code === null || primaryError?.code === undefined
+        ? null
+        : String(primaryError.code),
+    failureReason: serialiseFailureReason(
+      errors.length > 0 ? errors : 'WhatsApp reported a delivery failure'
+    ),
+    failureDetails: toSafeJson(primaryError ?? errors),
+  };
+}
+
+function buildStatusPayload(statusEvent) {
+  return toSafeJson({
+    id: statusEvent.id,
+    status: statusEvent.status,
+    timestamp: statusEvent.timestamp ?? null,
+    recipient_id: statusEvent.recipient_id ?? null,
+    conversation: statusEvent.conversation ?? null,
+    pricing: statusEvent.pricing ?? null,
+    errors: statusEvent.errors ?? null,
+    source: statusEvent.source ?? 'meta_webhook',
+  });
 }
 
 function createMessageDispatcher({
@@ -58,7 +128,28 @@ function createMessageDispatcher({
     }
 
     const waMessageId = sendResult?.messages?.[0]?.id ?? null;
-    const sentMessage = await markMessageSent(pendingMessage.id, waMessageId);
+    let sentMessage = await markMessageSent(pendingMessage.id, waMessageId);
+
+    // Insert a local "sent" event and replay any Meta status that arrived in
+    // the small window before wa_message_id was stored on the message row.
+    if (waMessageId) {
+      try {
+        const reconciledMessage = await updateDeliveryStatus({
+          id: waMessageId,
+          status: 'sent',
+          timestamp: Math.floor(Date.now() / 1000),
+          recipient_id: to,
+          source: 'send_response',
+        });
+        if (reconciledMessage) sentMessage = reconciledMessage;
+      } catch (error) {
+        logger.warn('Outbound message sent but status reconciliation failed', {
+          messageId: pendingMessage.id,
+          waMessageId,
+          error: error.message,
+        });
+      }
+    }
 
     try {
       await touchConversation(conversationId, new Date().toISOString());
@@ -85,27 +176,45 @@ function createMessageDispatcher({
   }
 
   async function updateDeliveryStatus(statusEvent) {
-    const waMessageId = statusEvent?.id;
-    const deliveryStatus = statusEvent?.status;
+    const waMessageId =
+      typeof statusEvent?.id === 'string' ? statusEvent.id.trim() : '';
+    const deliveryStatus =
+      typeof statusEvent?.status === 'string'
+        ? statusEvent.status.trim().toLowerCase()
+        : '';
 
     if (!waMessageId || !deliveryStatus) {
       logger.warn('Ignoring malformed WhatsApp delivery status event');
       return null;
     }
 
-    const failureReason =
-      deliveryStatus === 'failed' && statusEvent.errors
-        ? serialiseFailureReason(statusEvent.errors)
-        : null;
+    if (!WHATSAPP_DELIVERY_STATUSES.has(deliveryStatus)) {
+      logger.warn('Ignoring unsupported WhatsApp delivery status', {
+        waMessageId,
+        deliveryStatus,
+      });
+      return null;
+    }
 
-    const message = await updateMessageStatus({
-      waMessageId,
-      deliveryStatus,
-      failureReason,
+    const failure = extractFailureMetadata({
+      ...statusEvent,
+      status: deliveryStatus,
     });
 
+    const result = await updateMessageStatus({
+      waMessageId,
+      deliveryStatus,
+      providerTimestamp: normaliseProviderTimestamp(statusEvent.timestamp),
+      recipientPhone: statusEvent.recipient_id ?? null,
+      failureCode: failure.failureCode,
+      failureReason: failure.failureReason,
+      failureDetails: failure.failureDetails,
+      payload: buildStatusPayload({ ...statusEvent, status: deliveryStatus }),
+    });
+    const message = result?.message ?? (result?.id ? result : null);
+
     if (!message) {
-      logger.warn('No outbound message found for WhatsApp status event', {
+      logger.info('WhatsApp status event buffered until message ID is available', {
         waMessageId,
         deliveryStatus,
       });
@@ -158,12 +267,17 @@ function getDefaultDispatcher() {
     },
 
     async markMessageSent(messageId, waMessageId) {
+      const now = new Date().toISOString();
       const { data, error } = await supabase
         .from('messages')
         .update({
           wa_message_id: waMessageId,
           delivery_status: 'sent',
+          status_updated_at: now,
+          sent_at: now,
+          failure_code: null,
           failure_reason: null,
+          failure_details: null,
         })
         .eq('id', messageId)
         .select('*')
@@ -179,10 +293,14 @@ function getDefaultDispatcher() {
     },
 
     async markMessageFailed(messageId, failureReason) {
+      const now = new Date().toISOString();
       const { data, error } = await supabase
         .from('messages')
         .update({
           delivery_status: 'failed',
+          status_updated_at: now,
+          failed_at: now,
+          failure_code: 'LOCAL_SEND_FAILURE',
           failure_reason: failureReason,
         })
         .eq('id', messageId)
@@ -207,22 +325,31 @@ function getDefaultDispatcher() {
       }
     },
 
-    async updateMessageStatus({ waMessageId, deliveryStatus, failureReason }) {
-      const payload = { delivery_status: deliveryStatus };
-      if (failureReason) payload.failure_reason = failureReason;
-
-      const { data, error } = await supabase
-        .from('messages')
-        .update(payload)
-        .eq('wa_message_id', waMessageId)
-        .select('id, conversation_id, delivery_status, wa_message_id')
-        .maybeSingle();
+    async updateMessageStatus(status) {
+      const { data, error } = await supabase.rpc(
+        'apply_whatsapp_delivery_status',
+        {
+          p_wa_message_id: status.waMessageId,
+          p_status: status.deliveryStatus,
+          p_provider_timestamp: status.providerTimestamp,
+          p_recipient_phone: status.recipientPhone,
+          p_failure_code: status.failureCode,
+          p_failure_reason: status.failureReason,
+          p_failure_details: status.failureDetails,
+          p_payload: status.payload,
+        }
+      );
 
       if (error) {
-        throw new Error(`Failed to update message delivery status: ${error.message}`);
+        const migrationHint = error.code === 'PGRST202'
+          ? ' Run migration 007_whatsapp_delivery_statuses.sql.'
+          : '';
+        throw new Error(
+          `Failed to update message delivery status: ${error.message}.${migrationHint}`
+        );
       }
 
-      return data;
+      return Array.isArray(data) ? data[0] : data;
     },
   });
 
@@ -230,7 +357,11 @@ function getDefaultDispatcher() {
 }
 
 module.exports = {
+  WHATSAPP_DELIVERY_STATUSES,
+  buildStatusPayload,
   createMessageDispatcher,
+  extractFailureMetadata,
+  normaliseProviderTimestamp,
   serialiseFailureReason,
   dispatchTextMessage: (...args) =>
     getDefaultDispatcher().dispatchTextMessage(...args),

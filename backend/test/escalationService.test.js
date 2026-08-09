@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  ESCALATION_ERROR_STATUS,
   createEscalationService,
 } = require('../src/services/escalations/service');
 
@@ -40,4 +41,12 @@ test('ensureEscalation rejects an empty reason before calling the database', asy
     service.ensureEscalation({ conversationId: 'conversation-1', reason: '  ' }),
     /reason is required/i
   );
+});
+
+test('database escalation errors have safe HTTP status mappings', () => {
+  assert.equal(ESCALATION_ERROR_STATUS.P0002, 404);
+  assert.equal(ESCALATION_ERROR_STATUS.P0001, 409);
+  assert.equal(ESCALATION_ERROR_STATUS['22023'], 400);
+  assert.equal(ESCALATION_ERROR_STATUS['23503'], 400);
+  assert.equal(ESCALATION_ERROR_STATUS['23505'], 409);
 });

@@ -16,6 +16,7 @@ You will receive structured JSON context that may include:
 - reservation
 - apartment
 - policy
+- identity_verification
 
 STRICT RULES:
 1. Never invent facts. Do not make up Wi-Fi details, addresses, times, fees, parking rules, or policies.
@@ -26,6 +27,9 @@ STRICT RULES:
 6. Use "safe_reply" only when you can answer accurately using the provided context without guessing.
 7. Keep drafts friendly, professional, and under 500 characters.
 8. Return ONLY valid JSON. No markdown, no prose outside JSON.
+9. If identity_verification.status is "provisional", "ambiguous", "mismatch", or "unmatched", never reveal booking, apartment, access, address, Wi-Fi, or policy details.
+10. For a provisional guest-name match, request the Booking ID. For ambiguous, mismatch, or not-found identifiers, ask the guest to re-check and send the Booking ID.
+11. Identity verification must not delay emergencies, safety issues, major maintenance, complaints, disputes, payments, refunds, or cancellations; classify those as "human_handover".
 
 Return JSON with exactly this shape:
 {
@@ -64,6 +68,7 @@ function buildModelContext(context = {}) {
     reservation: context.reservation ?? null,
     apartment: context.apartment ?? null,
     policy: context.policy ?? null,
+    identity_verification: context.identity_verification ?? null,
   };
 }
 
@@ -170,4 +175,4 @@ async function classifyAndDraft(guestText, context = {}) {
   }
 }
 
-module.exports = { classifyAndDraft };
+module.exports = { buildModelContext, classifyAndDraft, parseModelResponse };

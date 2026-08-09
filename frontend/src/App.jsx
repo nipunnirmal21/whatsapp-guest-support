@@ -10,6 +10,10 @@ import {
   resumeAutomation,
   resolveConversation,
 } from './services/handover.js';
+import {
+  getDeliveryStatusPresentation,
+  normaliseDeliveryStatus,
+} from './services/messageDelivery.js';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 const DASHBOARD_API_KEY = import.meta.env.VITE_DASHBOARD_API_KEY || '';
@@ -116,6 +120,14 @@ function mapMessage(msg) {
     from,
     text: msg.content ?? msg.text ?? '',
     time: formatTime(msg.created_at) || msg.time || '',
+    deliveryStatus: normaliseDeliveryStatus(
+      msg.delivery_status ?? msg.deliveryStatus
+    ),
+    failureReason: msg.failure_reason ?? msg.failureReason ?? null,
+    sentAt: msg.sent_at ?? null,
+    deliveredAt: msg.delivered_at ?? null,
+    readAt: msg.read_at ?? null,
+    failedAt: msg.failed_at ?? null,
   };
 }
 
@@ -399,6 +411,32 @@ function SeverityBadge({ severity }) {
   );
 }
 
+function MessageMeta({ message, inverted = false }) {
+  const delivery = getDeliveryStatusPresentation(message.deliveryStatus);
+  const mutedClass = inverted ? 'text-[#0B1F3A]/40' : 'text-white/40';
+  const statusClass = delivery?.tone === 'error'
+    ? 'text-red-300'
+    : delivery?.tone === 'success'
+      ? inverted
+        ? 'text-[#0B1F3A]/70'
+        : 'text-[#C9A227]'
+      : mutedClass;
+
+  return (
+    <div className={`mt-1 flex items-center justify-end gap-2 text-[10px] ${mutedClass}`}>
+      <span>{message.time}</span>
+      {delivery && (
+        <span
+          className={statusClass}
+          title={delivery.status === 'failed' ? message.failureReason ?? 'Delivery failed' : undefined}
+        >
+          {delivery.label}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function MessageBubble({ message }) {
   const isGuest = message.from === 'guest';
   const isSystem = message.from === 'system';
@@ -422,7 +460,7 @@ function MessageBubble({ message }) {
         <div className="max-w-[75%] rounded-2xl rounded-br-sm border border-[#C9A227]/30 bg-[#C9A227]/10 px-4 py-3 text-sm text-white shadow-lg">
           <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">Auto Reply</span>
           <p>{message.text}</p>
-          <span className="mt-1 block text-[10px] text-white/40">{message.time}</span>
+          <MessageMeta message={message} />
         </div>
       </div>
     );
@@ -434,7 +472,7 @@ function MessageBubble({ message }) {
         <div className="max-w-[75%] rounded-2xl rounded-br-sm border border-white/10 bg-white px-4 py-3 text-sm text-[#0B1F3A] shadow-lg">
           <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">AI Draft</span>
           <p>{message.text}</p>
-          <span className="mt-1 block text-[10px] text-[#0B1F3A]/40">{message.time}</span>
+          <MessageMeta message={message} inverted />
         </div>
       </div>
     );
@@ -446,7 +484,7 @@ function MessageBubble({ message }) {
         <div className="max-w-[75%] rounded-2xl rounded-br-sm border border-[#C9A227]/30 bg-[#C9A227]/10 px-4 py-3 text-sm text-white shadow-lg">
           <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">Operator</span>
           <p>{message.text}</p>
-          <span className="mt-1 block text-[10px] text-white/40">{message.time}</span>
+          <MessageMeta message={message} />
         </div>
       </div>
     );
@@ -1467,6 +1505,7 @@ export default function App() {
       from: 'human',
       text: trimmed,
       time: 'Just now',
+      deliveryStatus: 'pending',
     };
 
     setConversations((prev) =>
