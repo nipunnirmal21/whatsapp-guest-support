@@ -4,13 +4,18 @@ const supabase = require('../../db/client');
 const logger = require('../../utils/logger');
 const { saveRawEvent } = require('../../db/rawEvents');
 const { extractTextFromMessage } = require('../../services/whatsapp/parser');
-const { markMessageAsRead, sendTextMessage } = require('../../services/whatsapp/sender');
+const { markMessageAsRead } = require('../../services/whatsapp/sender');
+const {
+  dispatchTextMessage,
+  updateDeliveryStatus,
+} = require('../../services/messages/dispatcher');
 const {
   findReservationByPhone,
   findOrCreateConversation,
 } = require('../../services/reservations/lookup');
 const { runRulesEngine } = require('../../services/rules/engine');
 const { classifyAndDraft } = require('../../services/ai/classifier');
+const { handleAiOutcome } = require('../../services/ai/outcomeHandler');
 
 // ---------------------------------------------------------------------------
 // GET /webhooks/whatsapp  —  Meta webhook verification handshake
@@ -83,7 +88,13 @@ router.post('/', async (req, res) => {
             recipientPhone: status.recipient_id,
             timestamp: status.timestamp,
           });
-          // TODO (Phase 3): update outbound message record in DB
+          updateDeliveryStatus(status).catch((err) =>
+            logger.error('Failed to persist WhatsApp message status', {
+              waMessageId: status.id,
+              status: status.status,
+              error: err.message,
+            })
+          );
         }
 
         // --- Inbound user messages ----------------------------------------
@@ -101,7 +112,7 @@ router.post('/', async (req, res) => {
           });
 
           // Dispatch to the message processor (non-blocking)
-          processInboundMessage(message, contact, value).catch((err) =>
+          processInboundMessage(message, contact).catch((err) =>
             logger.error('Error processing inbound message', {
               waMessageId: message.id,
               error: err.message,
@@ -150,38 +161,21 @@ async function saveInboundMessage(conversationId, message, textContent) {
 }
 
 // ---------------------------------------------------------------------------
-// saveOutboundMessage  —  persist an outbound reply against a conversation
-// ---------------------------------------------------------------------------
-async function saveOutboundMessage(conversationId, content, waMessageId, source) {
-  const { data, error } = await supabase
-    .from('messages')
-    .insert({
-      conversation_id: conversationId,
-      direction: 'outbound',
-      source,
-      content,
-      wa_message_id: waMessageId,
-      delivery_status: waMessageId ? 'sent' : null,
-    })
-    .select('id')
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to save outbound message: ${error.message}`);
-  }
-
-  return data;
-}
-
-// ---------------------------------------------------------------------------
 // updateConversationAiState  —  store LLM classification and draft for review
 // ---------------------------------------------------------------------------
-async function updateConversationAiState(conversationId, classification, draft) {
+async function updateConversationAiState(
+  conversationId,
+  classification,
+  draft,
+  inboundMessageId
+) {
   const { error } = await supabase
     .from('conversations')
     .update({
       ai_classification: classification,
       ai_draft: draft,
+      ai_action_status: 'classified',
+      ai_last_message_id: inboundMessageId,
     })
     .eq('id', conversationId);
 
@@ -197,7 +191,7 @@ async function updateConversationAiState(conversationId, classification, draft) 
 //   Phase 4 ✅ rules engine + AI layer
 //   Phase 5    escalation / dashboard integration
 // ---------------------------------------------------------------------------
-async function processInboundMessage(message, contact, value) {
+async function processInboundMessage(message, contact) {
   const from        = message.from;
   const messageType = message.type;
   const displayName = contact?.profile?.name ?? 'Guest';
@@ -253,19 +247,16 @@ async function processInboundMessage(message, contact, value) {
 
   if (rulesResult.outcome === 'auto_reply' && rulesResult.reply) {
     try {
-      const sendResult = await sendTextMessage(from, rulesResult.reply);
-      const waMessageId = sendResult?.messages?.[0]?.id ?? null;
-
-      await saveOutboundMessage(
-        conversation.id,
-        rulesResult.reply,
-        waMessageId,
-        'system'
-      );
+      const dispatched = await dispatchTextMessage({
+        conversationId: conversation.id,
+        to: from,
+        content: rulesResult.reply,
+        source: 'system',
+      });
 
       logger.info('Rules engine auto-reply sent', {
         conversationId: conversation.id,
-        waMessageId,
+        waMessageId: dispatched.waMessageId,
       });
     } catch (err) {
       logger.error('Failed to send or persist rules engine auto-reply', {
@@ -283,7 +274,8 @@ async function processInboundMessage(message, contact, value) {
     await updateConversationAiState(
       conversation.id,
       aiResult.classification,
-      aiResult.draft
+      aiResult.draft,
+      savedMessage.id
     );
 
     logger.info('Conversation updated with AI classification', {
@@ -291,14 +283,25 @@ async function processInboundMessage(message, contact, value) {
       classification: aiResult.classification,
       hasDraft: Boolean(aiResult.draft),
     });
+
+    const outcome = await handleAiOutcome({
+      conversation,
+      aiResult,
+      reservationContext: reservationContext ?? {},
+      inboundMessageId: savedMessage.id,
+    });
+
+    logger.info('AI classification outcome handled', {
+      conversationId: conversation.id,
+      classification: aiResult.classification,
+      action: outcome.action,
+    });
   } catch (err) {
-    logger.error('Failed to classify message or update conversation', {
+    logger.error('Failed to classify message or handle AI outcome', {
       conversationId: conversation.id,
       error: err.message,
     });
   }
-
-  // TODO (Phase 5): escalate or send AI draft based on classification
 }
 
 module.exports = router;

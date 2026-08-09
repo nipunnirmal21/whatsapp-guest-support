@@ -151,7 +151,7 @@ function isCheckinWindowOpen(reservation) {
  * @param {object|null} policy
  * @returns {string|null}
  */
-function buildWifiReply(apartment, policy) {
+function buildWifiReply(apartment) {
   const wifi = apartment?.wifi_details;
 
   if (!wifi?.ssid || !wifi?.password) {

@@ -15,7 +15,7 @@ const MAX_GUEST_TEXT_LENGTH = 1000;
  * @returns {string|null}
  */
 function truncateGuestText(text) {
-  if (text == null) return null;
+  if (text === null || text === undefined) return null;
 
   const normalised = String(text);
   if (normalised.length <= MAX_GUEST_TEXT_LENGTH) {
