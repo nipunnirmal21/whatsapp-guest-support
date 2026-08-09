@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../../db/client');
 const logger = require('../../utils/logger');
+const { ensureEscalation } = require('../../services/escalations/service');
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -97,76 +98,18 @@ router.post('/create', async (req, res, next) => {
       return res.status(400).json({ success: false, error: '"reason" cannot be empty' });
     }
 
-    const { data: existing, error: findError } = await supabase
-      .from('conversations')
-      .select('id')
-      .eq('id', conversationId)
-      .maybeSingle();
-
-    if (findError) {
-      logger.error('Failed to look up conversation for escalation', {
-        conversationId,
-        error: findError.message,
-      });
-      const err = new Error('Failed to escalate conversation');
-      err.status = 500;
-      throw err;
-    }
-
-    if (!existing) {
-      return res.status(404).json({ success: false, error: 'Conversation not found' });
-    }
-
-    const { data: conversation, error: updateError } = await supabase
-      .from('conversations')
-      .update({ status: 'escalated' })
-      .eq('id', conversationId)
-      .select('*')
-      .single();
-
-    if (updateError) {
-      logger.error('Failed to update conversation status to escalated', {
-        conversationId,
-        error: updateError.message,
-      });
-      const err = new Error('Failed to escalate conversation');
-      err.status = 500;
-      throw err;
-    }
-
-    const escalationPayload = {
-      conversation_id: conversationId,
+    const result = await ensureEscalation({
+      conversationId,
       reason: trimmedReason,
-      status: 'pending',
-    };
+      escalatedTo: escalatedTo || null,
+    });
 
-    if (escalatedTo) {
-      escalationPayload.escalated_to = escalatedTo;
-    }
-
-    const { data: escalation, error: escalationError } = await supabase
-      .from('escalations')
-      .insert(escalationPayload)
-      .select('*')
-      .single();
-
-    if (escalationError) {
-      logger.error('Failed to create escalation record', {
-        conversationId,
-        error: escalationError.message,
-      });
-      const err = new Error('Conversation escalated but failed to save escalation record');
-      err.status = 500;
-      throw err;
-    }
-
-    logger.info('Conversation escalated', { conversationId, escalationId: escalation.id });
-
-    return res.status(200).json({
+    return res.status(result.created ? 201 : 200).json({
       success: true,
       data: {
-        conversation,
-        escalation,
+        conversation: result.conversation,
+        escalation: result.escalation,
+        created: result.created,
       },
     });
   } catch (err) {

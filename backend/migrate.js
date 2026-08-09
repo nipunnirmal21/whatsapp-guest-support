@@ -27,7 +27,6 @@ const MIGRATIONS_DIR = path.join(__dirname, 'src', 'db', 'migrations');
 function log(level, message, meta) {
   const stamp = new Date().toISOString();
   const extra = meta ? ` ${JSON.stringify(meta)}` : '';
-  // eslint-disable-next-line no-console
   console[level === 'error' ? 'error' : 'log'](`[${stamp}] [${level}] ${message}${extra}`);
 }
 

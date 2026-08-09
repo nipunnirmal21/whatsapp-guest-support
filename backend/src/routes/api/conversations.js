@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../../db/client');
 const logger = require('../../utils/logger');
-const { sendTextMessage } = require('../../services/whatsapp/sender');
+const { dispatchTextMessage } = require('../../services/messages/dispatcher');
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -186,54 +186,18 @@ router.post('/:id/reply', async (req, res, next) => {
       return res.status(404).json({ success: false, error: 'Conversation not found' });
     }
 
-    const sendResult = await sendTextMessage(conversation.guest_phone, trimmedContent);
-    const waMessageId = sendResult?.messages?.[0]?.id ?? null;
-
-    const { data: message, error: messageError } = await supabase
-      .from('messages')
-      .insert({
-        conversation_id: conversation.id,
-        direction: 'outbound',
-        source: 'human',
-        content: trimmedContent,
-        wa_message_id: waMessageId,
-        delivery_status: waMessageId ? 'sent' : null,
-      })
-      .select('*')
-      .single();
-
-    if (messageError) {
-      logger.error('Failed to save dashboard reply', {
-        conversationId: id,
-        waMessageId,
-        error: messageError.message,
-      });
-      const err = new Error('Message sent but failed to save to database');
-      err.status = 500;
-      throw err;
-    }
-
-    const now = new Date().toISOString();
-    const { error: updateError } = await supabase
-      .from('conversations')
-      .update({ last_message_at: now })
-      .eq('id', conversation.id);
-
-    if (updateError) {
-      logger.error('Failed to update conversation timestamp after reply', {
-        conversationId: id,
-        messageId: message.id,
-        error: updateError.message,
-      });
-      const err = new Error('Message sent and saved but failed to update conversation');
-      err.status = 500;
-      throw err;
-    }
+    const dispatched = await dispatchTextMessage({
+      conversationId: conversation.id,
+      to: conversation.guest_phone,
+      content: trimmedContent,
+      source: 'human',
+    });
+    const message = dispatched.message;
 
     logger.info('Dashboard reply sent', {
       conversationId: id,
       messageId: message.id,
-      waMessageId,
+      waMessageId: dispatched.waMessageId,
     });
 
     return res.status(200).json({ success: true, data: message });
