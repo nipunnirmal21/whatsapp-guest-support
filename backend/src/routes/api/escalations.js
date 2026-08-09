@@ -3,6 +3,11 @@ const router = express.Router();
 const supabase = require('../../db/client');
 const logger = require('../../utils/logger');
 const { ensureEscalation } = require('../../services/escalations/service');
+const requireOperator = require('../../middleware/requireOperator');
+const {
+  takeOverEscalation,
+  resolveConversation,
+} = require('../../services/handover/service');
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -25,6 +30,12 @@ router.get('/', async (req, res, next) => {
       .select(
         `
         *,
+        assignee:admin_users!escalations_escalated_to_fkey (
+          id,
+          name,
+          email,
+          role
+        ),
         conversation:conversations (
           id,
           guest_phone,
@@ -63,6 +74,29 @@ router.get('/', async (req, res, next) => {
     }
 
     return res.status(200).json({ success: true, data: data ?? [] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/escalations/:id/take-over
+ * Atomically assigns an escalation and switches its conversation to manual.
+ */
+router.post('/:id/take-over', requireOperator, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!isValidUuid(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid escalation id' });
+    }
+
+    const result = await takeOverEscalation({
+      escalationId: id,
+      operatorId: req.adminUserId,
+    });
+
+    return res.status(200).json({ success: true, data: result });
   } catch (err) {
     next(err);
   }
@@ -123,7 +157,7 @@ router.post('/create', async (req, res, next) => {
  *
  * Body: { conversationId: string }
  */
-router.post('/resolve', async (req, res, next) => {
+router.post('/resolve', requireOperator, async (req, res, next) => {
   try {
     const { conversationId } = req.body;
 
@@ -138,60 +172,10 @@ router.post('/resolve', async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Invalid conversationId' });
     }
 
-    const { data: existing, error: findError } = await supabase
-      .from('conversations')
-      .select('id')
-      .eq('id', conversationId)
-      .maybeSingle();
-
-    if (findError) {
-      logger.error('Failed to look up conversation for resolution', {
-        conversationId,
-        error: findError.message,
-      });
-      const err = new Error('Failed to resolve conversation');
-      err.status = 500;
-      throw err;
-    }
-
-    if (!existing) {
-      return res.status(404).json({ success: false, error: 'Conversation not found' });
-    }
-
-    const { data: conversation, error: updateError } = await supabase
-      .from('conversations')
-      .update({ status: 'resolved' })
-      .eq('id', conversationId)
-      .select('*')
-      .single();
-
-    if (updateError) {
-      logger.error('Failed to update conversation status to resolved', {
-        conversationId,
-        error: updateError.message,
-      });
-      const err = new Error('Failed to resolve conversation');
-      err.status = 500;
-      throw err;
-    }
-
-    const { error: escalationError } = await supabase
-      .from('escalations')
-      .update({ status: 'resolved' })
-      .eq('conversation_id', conversationId)
-      .in('status', ['pending', 'acknowledged']);
-
-    if (escalationError) {
-      logger.error('Failed to resolve escalation records', {
-        conversationId,
-        error: escalationError.message,
-      });
-      const err = new Error('Conversation resolved but failed to update escalation records');
-      err.status = 500;
-      throw err;
-    }
-
-    logger.info('Conversation resolved', { conversationId });
+    const conversation = await resolveConversation({
+      conversationId,
+      operatorId: req.adminUserId,
+    });
 
     return res.status(200).json({ success: true, data: conversation });
   } catch (err) {

@@ -19,6 +19,7 @@ const conversationsRouter    = require('./routes/api/conversations');
 const escalationsRouter      = require('./routes/api/escalations');
 const intentsRouter          = require('./routes/api/intents');
 const settingsRouter         = require('./routes/api/settings');
+const adminUsersRouter       = require('./routes/api/adminUsers');
 
 const app = express();
 
@@ -162,6 +163,7 @@ app.use('/api/conversations', conversationsRouter);
 app.use('/api/escalations',   escalationsRouter);
 app.use('/api/intents',       intentsRouter);
 app.use('/api/settings',      settingsRouter);
+app.use('/api/admin-users',   adminUsersRouter);
 
 // ---------------------------------------------------------------------------
 // 404 handler

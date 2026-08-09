@@ -3,9 +3,17 @@ import {
   loadAutomationSettings,
   saveAutomationSettings,
 } from './services/automationSettings.js';
+import {
+  takeOverEscalation,
+  assignConversation,
+  startManualMode,
+  resumeAutomation,
+  resolveConversation,
+} from './services/handover.js';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 const DASHBOARD_API_KEY = import.meta.env.VITE_DASHBOARD_API_KEY || '';
+const ADMIN_USER_ID = import.meta.env.VITE_ADMIN_USER_ID || '';
 
 /**
  * Central authenticated fetch for all dashboard API calls.
@@ -16,6 +24,10 @@ async function fetchWithAuth(path, options = {}) {
 
   if (DASHBOARD_API_KEY) {
     headers.set('X-API-Key', DASHBOARD_API_KEY);
+  }
+
+  if (ADMIN_USER_ID) {
+    headers.set('X-Admin-User-Id', ADMIN_USER_ID);
   }
 
   if (options.body && !headers.has('Content-Type')) {
@@ -81,7 +93,8 @@ function calculateNights(checkin, checkout) {
 }
 
 function mapConversationStatus(convStatus, resStatus) {
-  if (convStatus === 'escalated' || convStatus === 'manual') return 'Escalated';
+  if (convStatus === 'manual') return 'Manual';
+  if (convStatus === 'escalated') return 'Escalated';
   if (convStatus === 'resolved') return 'Resolved';
   if (resStatus === 'checked_in') return 'Checked In';
   if (resStatus === 'checked_out') return 'Resolved';
@@ -129,11 +142,15 @@ function normalizeConversation(raw) {
     unread: raw.unread ?? 0,
     aiInsight: raw.ai_classification ?? '—',
     aiDraft: raw.ai_draft ?? null,
+    assignedTo: raw.assigned_to ?? null,
+    assigneeName: raw.assignee?.name ?? null,
+    manualModeReason: raw.manual_mode_reason ?? null,
     messages,
     messagesLoaded: Array.isArray(raw.messages),
     reservation: {
       guests: raw.guest_count ?? 1,
       nights: calculateNights(reservation?.checkin_date, reservation?.checkout_date),
+      rawStatus: reservation?.status ?? null,
       source: reservation?.booking_source ?? '—',
       total: raw.total ?? '—',
       policy: raw.policy ?? 'Checkout per house policy',
@@ -163,6 +180,25 @@ function normalizeEscalation(raw) {
     time: formatRelativeTime(raw.created_at),
     status: statusMap[raw.status] ?? 'Pending',
     rawStatus: raw.status ?? 'pending',
+    assignedTo: raw.escalated_to ?? null,
+    assigneeName: raw.assignee?.name ?? null,
+  };
+}
+
+function mergeHandoverState(conversation, raw) {
+  const rawStatus = raw?.status ?? conversation.rawStatus;
+  const assignedTo = raw?.assigned_to ?? null;
+  return {
+    ...conversation,
+    rawStatus,
+    status: mapConversationStatus(rawStatus, conversation.reservation.rawStatus),
+    priority: rawStatus === 'manual' || rawStatus === 'escalated' ? 'escalated' : 'normal',
+    assignedTo,
+    assigneeName: assignedTo
+      ? raw?.assignee?.name ??
+        (assignedTo === conversation.assignedTo ? conversation.assigneeName : null)
+      : null,
+    manualModeReason: raw?.manual_mode_reason ?? null,
   };
 }
 
@@ -187,9 +223,11 @@ function computeAnalytics(conversations, escalations) {
     (e) => e.status === 'Pending' || e.status === 'Acknowledged'
   ).length;
   const resolved = conversations.filter((c) => c.status === 'Resolved').length;
-  const escalated = conversations.filter((c) => c.status === 'Escalated').length;
+  const escalated = conversations.filter(
+    (c) => c.status === 'Escalated' || c.status === 'Manual'
+  ).length;
   const open = conversations.filter(
-    (c) => c.status !== 'Resolved' && c.status !== 'Escalated'
+    (c) => c.status !== 'Resolved' && c.status !== 'Escalated' && c.status !== 'Manual'
   ).length;
 
   const withAi = conversations.filter(
@@ -334,6 +372,7 @@ function StatusBadge({ status }) {
     'Checked In': 'bg-[#C9A227]/15 text-[#C9A227] border-[#C9A227]/40',
     Confirmed: 'bg-white/10 text-white border-white/20',
     Escalated: 'bg-black text-[#C9A227] border-[#C9A227]/60',
+    Manual: 'bg-[#C9A227] text-[#0B1F3A] border-[#C9A227]',
     Resolved: 'bg-[#132B4F] text-white/70 border-[#1E3A5F]',
     Pending: 'bg-[#C9A227]/10 text-[#C9A227] border-[#C9A227]/40',
     Acknowledged: 'bg-white/10 text-white border-white/20',
@@ -468,9 +507,18 @@ function InboxView({
   sendError,
   messagesLoading,
   onEscalate,
+  adminUsers,
+  onAssignConversation,
+  onStartManualMode,
+  onResumeAutomation,
   escalateBusy,
+  actionBusyId,
 }) {
   const selected = conversations.find((c) => c.id === selectedId) ?? null;
+  const currentAdmin = adminUsers.find((user) => user.id === ADMIN_USER_ID);
+  const assignableUsers = ['supervisor', 'admin'].includes(currentAdmin?.role)
+    ? adminUsers
+    : adminUsers.filter((user) => user.id === ADMIN_USER_ID);
 
   if (!selected) {
     return (
@@ -522,7 +570,7 @@ function InboxView({
                       <p className="truncate text-sm font-semibold text-white">{convo.guest}</p>
                       {convo.priority === 'escalated' && (
                         <span className="shrink-0 rounded bg-black px-1.5 py-0.5 text-[9px] font-bold uppercase text-[#C9A227]">
-                          Esc
+                          {convo.rawStatus === 'manual' ? 'Man' : 'Esc'}
                         </span>
                       )}
                     </div>
@@ -559,21 +607,50 @@ function InboxView({
               <h3 className="text-base font-semibold text-white">{selected.guest}</h3>
               <p className="text-xs text-white/50">{selected.phone}</p>
             </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <StatusBadge status={selected.status} />
-            {selected.priority !== 'escalated' && (
+           </div>
+           <div className="flex items-center gap-2">
+             <StatusBadge status={selected.status} />
+            {selected.rawStatus === 'manual' ? (
               <button
                 type="button"
-                disabled={escalateBusy}
-                onClick={() => onEscalate(selected)}
-                className="rounded-lg border border-[#C9A227] bg-[#C9A227] px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-[#0B1F3A] transition hover:bg-[#D4AF37] disabled:opacity-50"
+                disabled={actionBusyId === selected.id}
+                onClick={() => onResumeAutomation(selected)}
+                className="rounded-lg border border-white/20 bg-[#132B4F] px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-white transition hover:border-[#C9A227] hover:text-[#C9A227] disabled:opacity-50"
               >
-                Escalate
+                Resume Automation
               </button>
-            )}
+            ) : selected.rawStatus !== 'resolved' ? (
+              <button
+                type="button"
+                disabled={actionBusyId === selected.id}
+                onClick={() => onStartManualMode(selected)}
+                className="rounded-lg border border-white/20 bg-[#132B4F] px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-white transition hover:border-[#C9A227] hover:text-[#C9A227] disabled:opacity-50"
+              >
+                {selected.rawStatus === 'escalated' ? 'Take Over' : 'Manual Mode'}
+              </button>
+            ) : null}
+            {selected.rawStatus !== 'manual' &&
+              selected.rawStatus !== 'escalated' &&
+              selected.rawStatus !== 'resolved' && (
+                <button
+                  type="button"
+                  disabled={escalateBusy}
+                  onClick={() => onEscalate(selected)}
+                  className="rounded-lg border border-[#C9A227] bg-[#C9A227] px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-[#0B1F3A] transition hover:bg-[#D4AF37] disabled:opacity-50"
+                >
+                  Escalate
+                </button>
+              )}
           </div>
         </div>
+
+        {(selected.rawStatus === 'manual' || selected.rawStatus === 'escalated') && (
+          <div className="border-b border-[#C9A227]/30 bg-black px-6 py-2 text-center text-xs text-[#C9A227]">
+            {selected.rawStatus === 'manual'
+              ? `Manual mode active${selected.assigneeName ? ` - ${selected.assigneeName}` : ''}. AI and rules auto-replies are paused.`
+              : 'Awaiting human takeover. AI and rules auto-replies are paused.'}
+          </div>
+        )}
 
         <div className="flex-1 space-y-4 overflow-y-auto px-6 py-6">
           <div className="mx-auto max-w-2xl rounded-xl border border-[#1E3A5F] bg-[#0B1F3A]/50 px-4 py-2 text-center">
@@ -678,14 +755,71 @@ function InboxView({
           </div>
 
           <div className="mt-4 space-y-2">
-            <button
-              type="button"
-              disabled={escalateBusy || selected.priority === 'escalated'}
-              onClick={() => onEscalate(selected)}
-              className="w-full rounded-xl border border-[#C9A227]/40 bg-black px-4 py-3 text-left text-sm font-medium text-[#C9A227] transition hover:bg-[#C9A227] hover:text-[#0B1F3A] disabled:opacity-40"
+            {selected.rawStatus === 'manual' ? (
+              <button
+                type="button"
+                disabled={actionBusyId === selected.id}
+                onClick={() => onResumeAutomation(selected)}
+                className="w-full rounded-xl border border-white/20 bg-[#132B4F] px-4 py-3 text-left text-sm font-medium text-white transition hover:border-[#C9A227] hover:text-[#C9A227] disabled:opacity-40"
+              >
+                Resume AI Automation
+              </button>
+            ) : selected.rawStatus !== 'resolved' ? (
+              <button
+                type="button"
+                disabled={actionBusyId === selected.id}
+                onClick={() => onStartManualMode(selected)}
+                className="w-full rounded-xl border border-white/20 bg-[#132B4F] px-4 py-3 text-left text-sm font-medium text-white transition hover:border-[#C9A227] hover:text-[#C9A227] disabled:opacity-40"
+              >
+                {selected.rawStatus === 'escalated' ? 'Take Over Conversation' : 'Start Manual Mode'}
+              </button>
+            ) : null}
+            {selected.rawStatus !== 'manual' &&
+              selected.rawStatus !== 'escalated' &&
+              selected.rawStatus !== 'resolved' && (
+                <button
+                  type="button"
+                  disabled={escalateBusy}
+                  onClick={() => onEscalate(selected)}
+                  className="w-full rounded-xl border border-[#C9A227]/40 bg-black px-4 py-3 text-left text-sm font-medium text-[#C9A227] transition hover:bg-[#C9A227] hover:text-[#0B1F3A] disabled:opacity-40"
+                >
+                  Escalate to Supervisor
+                </button>
+              )}
+          </div>
+
+          <div className="mt-4 rounded-xl border border-[#1E3A5F] bg-[#132B4F] p-4">
+            <label
+              htmlFor="conversation-assignee"
+              className="text-[10px] font-bold uppercase tracking-widest text-white/40"
             >
-              {selected.priority === 'escalated' ? 'Already Escalated' : 'Escalate to Supervisor'}
-            </button>
+              Assigned Operator
+            </label>
+            <select
+              id="conversation-assignee"
+              value={selected.assignedTo ?? ''}
+              disabled={
+                selected.rawStatus === 'resolved' ||
+                actionBusyId === selected.id ||
+                assignableUsers.length === 0
+              }
+              onChange={(event) => onAssignConversation(selected, event.target.value)}
+              className="mt-2 w-full rounded-lg border border-[#1E3A5F] bg-black px-3 py-2 text-sm text-white outline-none transition focus:border-[#C9A227] disabled:opacity-40"
+            >
+              <option value="" disabled>
+                Unassigned
+              </option>
+              {assignableUsers.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.name} ({user.role})
+                </option>
+              ))}
+            </select>
+            {assignableUsers.length === 0 && (
+              <p className="mt-2 text-[10px] text-[#C9A227]">
+                Configure VITE_ADMIN_USER_ID to enable assignment.
+              </p>
+            )}
           </div>
 
           <div className="mt-6 rounded-2xl border border-[#1E3A5F] bg-black p-4">
@@ -858,7 +992,7 @@ function EscalationsView({ tickets, loading, error, onTakeOver, onResolve, onVie
                     </button>
                   ) : (
                     <span className="rounded-xl border border-white/20 bg-[#132B4F] px-5 py-2.5 text-center text-xs font-bold uppercase tracking-wide text-white/50">
-                      Assigned to You
+                      {ticket.assigneeName ? `Assigned to ${ticket.assigneeName}` : 'Assigned'}
                     </span>
                   )}
                   <button
@@ -1054,6 +1188,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [replyText, setReplyText] = useState('');
   const [escalationTickets, setEscalationTickets] = useState([]);
+  const [adminUsers, setAdminUsers] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [escalationsLoading, setEscalationsLoading] = useState(false);
@@ -1087,6 +1222,11 @@ export default function App() {
       .filter((t) => t.rawStatus !== 'resolved');
   }, []);
 
+  const loadAdminUsers = useCallback(async () => {
+    const json = await fetchWithAuth('/api/admin-users');
+    return json.data ?? [];
+  }, []);
+
   /** Merge list poll into state without wiping loaded message threads */
   const mergeConversationList = useCallback((incoming) => {
     setConversations((prev) => {
@@ -1110,11 +1250,16 @@ export default function App() {
   }, []);
 
   const refreshDashboard = useCallback(async () => {
-    const [convos, tickets] = await Promise.all([loadConversations(), loadEscalations()]);
+    const [convos, tickets, users] = await Promise.all([
+      loadConversations(),
+      loadEscalations(),
+      loadAdminUsers(),
+    ]);
     setConversations(convos);
     setEscalationTickets(tickets);
+    setAdminUsers(users);
     return convos;
-  }, [loadConversations, loadEscalations]);
+  }, [loadAdminUsers, loadConversations, loadEscalations]);
 
   // Initial load
   useEffect(() => {
@@ -1293,6 +1438,16 @@ export default function App() {
   const activeStays = conversations.filter(
     (c) => c.status === 'Checked In' || c.status === 'Confirmed'
   ).length;
+  const currentAdminUser = adminUsers.find((user) => user.id === ADMIN_USER_ID) ?? null;
+  const currentAdminName = currentAdminUser?.name ?? 'Operator not configured';
+  const currentAdminInitials = currentAdminUser?.name
+    ? currentAdminUser.name
+        .split(' ')
+        .map((part) => part[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase()
+    : '?';
 
   async function handleSendMessage() {
     const trimmed = replyText.trim();
@@ -1346,6 +1501,11 @@ export default function App() {
                   messages: convo.messages.map((msg) =>
                     msg.id === optimisticId ? serverMessage : msg
                   ),
+                  status: 'Manual',
+                  rawStatus: 'manual',
+                  priority: 'escalated',
+                  assignedTo: ADMIN_USER_ID || convo.assignedTo,
+                  assigneeName: currentAdminUser?.name ?? convo.assigneeName,
                 }
               : convo
           )
@@ -1401,13 +1561,150 @@ export default function App() {
     }
   }
 
-  function handleTakeOver(ticket) {
-    setEscalationTickets((prev) =>
-      prev.map((t) => (t.id === ticket.id ? { ...t, status: 'Acknowledged' } : t))
-    );
-    if (ticket.conversationId) {
-      setSelectedId(ticket.conversationId);
-      setActiveNav('inbox');
+  async function handleTakeOver(ticket) {
+    if (!ticket?.id || actionBusyId) return;
+    setActionBusyId(ticket.id);
+    setEscalationsError(null);
+
+    try {
+      const result = await takeOverEscalation(fetchWithAuth, ticket.id);
+      const assigneeName = currentAdminUser?.name ?? null;
+
+      setEscalationTickets((prev) =>
+        prev.map((t) =>
+          t.id === ticket.id
+            ? {
+                ...t,
+                status: 'Acknowledged',
+                rawStatus: 'acknowledged',
+                assignedTo: result.escalation?.escalated_to ?? ADMIN_USER_ID,
+                assigneeName,
+              }
+            : t
+        )
+      );
+
+      if (ticket.conversationId) {
+        setConversations((prev) =>
+          prev.map((conversation) =>
+            conversation.id === ticket.conversationId
+              ? { ...mergeHandoverState(conversation, result.conversation), assigneeName }
+              : conversation
+          )
+        );
+        setSelectedId(ticket.conversationId);
+        setActiveNav('inbox');
+      }
+    } catch (err) {
+      setEscalationsError(err.message || 'Failed to take over escalation');
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
+  async function handleStartManualMode(conversation) {
+    if (!conversation?.id || actionBusyId) return;
+    setActionBusyId(conversation.id);
+    setSendError(null);
+
+    try {
+      const updated = await startManualMode(
+        fetchWithAuth,
+        conversation.id,
+        conversation.rawStatus === 'escalated'
+          ? 'Operator took over escalated conversation'
+          : 'Operator started manual mode'
+      );
+
+      setConversations((prev) =>
+        prev.map((item) =>
+          item.id === conversation.id
+            ? {
+                ...mergeHandoverState(item, updated),
+                assigneeName: currentAdminUser?.name ?? null,
+              }
+            : item
+        )
+      );
+      setEscalationTickets((prev) =>
+        prev.map((ticket) =>
+          ticket.conversationId === conversation.id
+            ? {
+                ...ticket,
+                status: 'Acknowledged',
+                rawStatus: 'acknowledged',
+                assignedTo: updated.assigned_to,
+                assigneeName: currentAdminUser?.name ?? null,
+              }
+            : ticket
+        )
+      );
+    } catch (err) {
+      setSendError(err.message || 'Failed to start manual mode');
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
+  async function handleAssignConversation(conversation, assignedTo) {
+    if (!conversation?.id || !assignedTo || actionBusyId) return;
+    setActionBusyId(conversation.id);
+    setSendError(null);
+
+    try {
+      const updated = await assignConversation(
+        fetchWithAuth,
+        conversation.id,
+        assignedTo
+      );
+      const assigneeName = adminUsers.find((user) => user.id === assignedTo)?.name ?? null;
+
+      setConversations((prev) =>
+        prev.map((item) =>
+          item.id === conversation.id
+            ? { ...mergeHandoverState(item, updated), assigneeName }
+            : item
+        )
+      );
+      setEscalationTickets((prev) =>
+        prev.map((ticket) =>
+          ticket.conversationId === conversation.id
+            ? {
+                ...ticket,
+                status: 'Acknowledged',
+                rawStatus: 'acknowledged',
+                assignedTo,
+                assigneeName,
+              }
+            : ticket
+        )
+      );
+    } catch (err) {
+      setSendError(err.message || 'Failed to assign conversation');
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
+  async function handleResumeAutomation(conversation) {
+    if (!conversation?.id || actionBusyId) return;
+    setActionBusyId(conversation.id);
+    setSendError(null);
+
+    try {
+      const updated = await resumeAutomation(fetchWithAuth, conversation.id);
+      setConversations((prev) =>
+        prev.map((item) =>
+          item.id === conversation.id ? mergeHandoverState(item, updated) : item
+        )
+      );
+      setEscalationTickets((prev) =>
+        prev.filter((ticket) => ticket.conversationId !== conversation.id)
+      );
+    } catch (err) {
+      setSendError(err.message || 'Failed to resume automation');
+    } finally {
+      setActionBusyId(null);
     }
   }
 
@@ -1416,15 +1713,12 @@ export default function App() {
     setActionBusyId(ticket.id);
     setEscalationsError(null);
     try {
-      await fetchWithAuth('/api/escalations/resolve', {
-        method: 'POST',
-        body: JSON.stringify({ conversationId: ticket.conversationId }),
-      });
+      const updated = await resolveConversation(fetchWithAuth, ticket.conversationId);
       setEscalationTickets((prev) => prev.filter((t) => t.id !== ticket.id));
       setConversations((prev) =>
         prev.map((c) =>
           c.id === ticket.conversationId
-            ? { ...c, status: 'Resolved', priority: 'normal', rawStatus: 'resolved' }
+            ? mergeHandoverState(c, updated)
             : c
         )
       );
@@ -1582,11 +1876,13 @@ export default function App() {
 
             <div className="flex items-center gap-3 rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-3 py-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#C9A227] text-xs font-bold text-[#0B1F3A]">
-                KS
+                {currentAdminInitials}
               </div>
               <div className="hidden sm:block">
-                <p className="text-sm font-medium text-white">Kavish Silva</p>
-                <p className="text-[10px] text-[#C9A227]">Operations Manager</p>
+                <p className="text-sm font-medium text-white">{currentAdminName}</p>
+                <p className="text-[10px] capitalize text-[#C9A227]">
+                  {currentAdminUser?.role ?? 'Set VITE_ADMIN_USER_ID'}
+                </p>
               </div>
             </div>
           </div>
@@ -1610,7 +1906,12 @@ export default function App() {
               sendError={sendError}
               messagesLoading={messagesLoading}
               onEscalate={handleEscalate}
+              adminUsers={adminUsers}
+              onAssignConversation={handleAssignConversation}
+              onStartManualMode={handleStartManualMode}
+              onResumeAutomation={handleResumeAutomation}
               escalateBusy={escalateBusy}
+              actionBusyId={actionBusyId}
             />
           )}
 

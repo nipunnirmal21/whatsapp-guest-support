@@ -16,6 +16,9 @@ const {
 const { runRulesEngine } = require('../../services/rules/engine');
 const { classifyAndDraft } = require('../../services/ai/classifier');
 const { handleAiOutcome } = require('../../services/ai/outcomeHandler');
+const {
+  isConversationAutomationPaused,
+} = require('../../services/conversations/automation');
 
 // ---------------------------------------------------------------------------
 // GET /webhooks/whatsapp  —  Meta webhook verification handshake
@@ -234,6 +237,18 @@ async function processInboundMessage(message, contact) {
 
   // Duplicate webhook delivery — message already stored; skip response pipeline
   if (!savedMessage) {
+    return;
+  }
+
+  // Human handover/manual mode owns the conversation. Keep storing inbound
+  // messages and read receipts, but do not run rules or AI auto-replies.
+  if (isConversationAutomationPaused(conversation)) {
+    logger.info('Automation skipped for human-owned conversation', {
+      conversationId: conversation.id,
+      status: conversation.status,
+      assignedTo: conversation.assigned_to ?? null,
+      inboundMessageId: savedMessage.id,
+    });
     return;
   }
 

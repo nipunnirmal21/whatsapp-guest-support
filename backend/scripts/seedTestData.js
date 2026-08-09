@@ -65,7 +65,23 @@ async function main() {
     }
   }
 
-  // 1. Upsert Apartment
+  // 1. Upsert a dashboard operator for Take Over / assignment testing.
+  const { data: adminUser, error: adminError } = await supabase
+    .from('admin_users')
+    .upsert({
+      email: 'test-operator@serendib.local',
+      name: 'Test Support Operator',
+      role: 'operator'
+    }, { onConflict: 'email' })
+    .select()
+    .single();
+
+  if (adminError) {
+    console.error('Failed to upsert test dashboard operator:', adminError.message);
+    process.exit(1);
+  }
+
+  // 2. Upsert Apartment
   const { data: apt, error: aptError } = await supabase
     .from('apartments')
     .upsert({
@@ -83,7 +99,7 @@ async function main() {
     process.exit(1);
   }
 
-  // 2. Upsert Apartment Policy
+  // 3. Upsert Apartment Policy
   const { error: policyError } = await supabase
     .from('apartment_policies')
     .upsert({
@@ -105,7 +121,7 @@ async function main() {
     process.exit(1);
   }
 
-  // 3. Upsert Guest
+  // 4. Upsert Guest
   const { data: guest, error: guestError } = await supabase
     .from('guests')
     .upsert({
@@ -121,7 +137,7 @@ async function main() {
     process.exit(1);
   }
 
-  // 4. Upsert Reservation
+  // 5. Upsert Reservation
   const today = new Date();
   const checkinDate = today.toISOString().split('T')[0];
   const checkoutDateObj = new Date(today);
@@ -153,8 +169,9 @@ async function main() {
   const { data: verifyPolicy } = await supabase.from('apartment_policies').select('*').eq('apartment_id', apt.id).single();
   const { data: verifyGuest } = await supabase.from('guests').select('*').eq('id', guest.id).single();
   const { data: verifyRes } = await supabase.from('reservations').select('*').eq('id', reservation.id).single();
+  const { data: verifyAdmin } = await supabase.from('admin_users').select('*').eq('id', adminUser.id).single();
 
-  if (!verifyApt || !verifyPolicy || !verifyGuest || !verifyRes) {
+  if (!verifyApt || !verifyPolicy || !verifyGuest || !verifyRes || !verifyAdmin) {
     console.error('Error: Verification failed. Some records could not be retrieved.');
     process.exit(1);
   }
@@ -189,6 +206,7 @@ async function main() {
 
   console.log(`Apartment ID: ${apt.id}`);
   console.log(`Apartment Code: ${apt.code}`);
+  console.log(`Dashboard Operator ID: ${adminUser.id}`);
   console.log(`Guest ID: ${guest.id}`);
   console.log(`Guest Phone (last 4 digits): ${testPhone.slice(-4)}`);
   console.log(`Reservation ID: ${reservation.id}`);
