@@ -4,11 +4,6 @@ const HOLDING_MESSAGE =
 const DEFAULT_CLARIFICATION_MESSAGE =
   'Could you please share a few more details so we can help you?';
 
-function parseBoolean(value, fallback = false) {
-  if (value === undefined || value === null || value === '') return fallback;
-  return String(value).trim().toLowerCase() === 'true';
-}
-
 function isManualConversation(conversation) {
   return ['escalated', 'manual'].includes(conversation?.status);
 }
@@ -17,8 +12,7 @@ function createAiOutcomeHandler({
   dispatchTextMessage,
   ensureEscalation,
   updateAiActionState,
-  safeAutoReplyEnabled,
-  autoSendClarifications,
+  getAutomationSettings,
   logger,
 }) {
   async function setActionState(conversationId, status, inboundMessageId) {
@@ -144,8 +138,9 @@ function createAiOutcomeHandler({
         });
       }
 
+      const settings = await getAutomationSettings({ failClosed: true });
       const canAutoSend =
-        safeAutoReplyEnabled &&
+        settings.effectiveAiAutoReplyEnabled &&
         Boolean(reservationContext?.reservation) &&
         !isManualConversation(conversation);
 
@@ -163,7 +158,11 @@ function createAiOutcomeHandler({
     }
 
     if (classification === 'clarification_needed') {
-      if (!autoSendClarifications || isManualConversation(conversation)) {
+      const settings = await getAutomationSettings({ failClosed: true });
+      if (
+        !settings.effectiveAutoSendClarifications ||
+        isManualConversation(conversation)
+      ) {
         await setActionState(conversation.id, 'awaiting_approval', inboundMessageId);
         return { action: 'awaiting_approval' };
       }
@@ -205,16 +204,13 @@ function getDefaultHandler() {
   const logger = require('../../utils/logger');
   const { dispatchTextMessage } = require('../messages/dispatcher');
   const { ensureEscalation } = require('../escalations/service');
+  const { getAutomationSettings } = require('../settings/automation');
 
   defaultHandler = createAiOutcomeHandler({
     logger,
     dispatchTextMessage,
     ensureEscalation,
-    safeAutoReplyEnabled: parseBoolean(process.env.AI_AUTO_REPLY_ENABLED, false),
-    autoSendClarifications: parseBoolean(
-      process.env.AI_AUTO_SEND_CLARIFICATIONS,
-      true
-    ),
+    getAutomationSettings,
     async updateAiActionState({ conversationId, status, inboundMessageId }) {
       const payload = { ai_action_status: status };
       if (inboundMessageId) payload.ai_last_message_id = inboundMessageId;
@@ -236,7 +232,6 @@ function getDefaultHandler() {
 module.exports = {
   HOLDING_MESSAGE,
   DEFAULT_CLARIFICATION_MESSAGE,
-  parseBoolean,
   createAiOutcomeHandler,
   handleAiOutcome: (...args) => getDefaultHandler().handleAiOutcome(...args),
 };

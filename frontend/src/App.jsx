@@ -1,4 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
+import {
+  loadAutomationSettings,
+  saveAutomationSettings,
+} from './services/automationSettings.js';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 const DASHBOARD_API_KEY = import.meta.env.VITE_DASHBOARD_API_KEY || '';
@@ -412,7 +416,7 @@ function MessageBubble({ message }) {
   return null;
 }
 
-function ToggleSwitch({ enabled, onChange, label, description }) {
+function ToggleSwitch({ enabled, onChange, label, description, disabled = false }) {
   return (
     <div className="flex items-center justify-between gap-4 rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-5 py-4">
       <div>
@@ -423,10 +427,12 @@ function ToggleSwitch({ enabled, onChange, label, description }) {
         type="button"
         role="switch"
         aria-checked={enabled}
+        aria-disabled={disabled}
+        disabled={disabled}
         onClick={() => onChange(!enabled)}
         className={`relative h-7 w-12 shrink-0 rounded-full transition-colors duration-200 ${
           enabled ? 'bg-[#C9A227]' : 'bg-[#1E3A5F]'
-        }`}
+        } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
       >
         <span
           className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-md transition-transform duration-200 ${
@@ -948,8 +954,14 @@ function AnalyticsView({ conversations = [], escalations = [] }) {
 function SettingsView({
   aiAutoReply,
   setAiAutoReply,
+  autoSendClarifications,
+  setAutoSendClarifications,
   onSave,
   saveMessage,
+  settingsLoading,
+  settingsSaving,
+  settingsError,
+  emergencyDisabled,
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[#132B4F] p-6">
@@ -968,9 +980,36 @@ function SettingsView({
             <ToggleSwitch
               enabled={aiAutoReply}
               onChange={setAiAutoReply}
-              label="AI Auto-Reply"
-              description="Allow the rules engine and classifier to send automated WhatsApp replies without operator approval."
+              disabled={settingsLoading || settingsSaving}
+              label="AI Safe Replies"
+              description="Automatically send safe AI drafts only when an active reservation is matched. Rules-based replies are controlled separately by the backend."
             />
+            <div className="mt-3">
+              <ToggleSwitch
+                enabled={autoSendClarifications}
+                onChange={setAutoSendClarifications}
+                disabled={settingsLoading || settingsSaving}
+                label="Clarification Questions"
+                description="Automatically ask guests for missing booking or request details when the AI needs clarification."
+              />
+            </div>
+
+            {emergencyDisabled && (
+              <div className="mt-3 rounded-xl border border-[#C9A227]/50 bg-black px-4 py-3">
+                <p className="text-xs font-semibold text-[#C9A227]">
+                  Emergency override active
+                </p>
+                <p className="mt-1 text-xs text-white/50">
+                  All AI automatic messages are forced off by the backend environment setting.
+                </p>
+              </div>
+            )}
+
+            {settingsError && (
+              <div className="mt-3 rounded-xl border border-[#C9A227]/40 bg-black px-4 py-3 text-xs text-[#C9A227]">
+                {settingsError}
+              </div>
+            )}
           </section>
 
           <section className="rounded-xl border border-[#1E3A5F] bg-[#0B1F3A]/60 p-4">
@@ -988,14 +1027,19 @@ function SettingsView({
             {saveMessage ? (
               <p className="text-sm font-medium text-[#C9A227]">{saveMessage}</p>
             ) : (
-              <p className="text-xs text-white/40">Preferences are stored in this browser session only.</p>
+              <p className="text-xs text-white/40">
+                {settingsLoading
+                  ? 'Loading automation settings...'
+                  : 'Preferences are stored securely in the backend database.'}
+              </p>
             )}
             <button
               type="button"
               onClick={onSave}
-              className="rounded-xl bg-[#C9A227] px-6 py-3 text-sm font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37]"
+              disabled={settingsLoading || settingsSaving}
+              className="rounded-xl bg-[#C9A227] px-6 py-3 text-sm font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Save Preferences
+              {settingsSaving ? 'Saving...' : 'Save Preferences'}
             </button>
           </div>
         </div>
@@ -1018,7 +1062,12 @@ export default function App() {
   const [sendError, setSendError] = useState(null);
   const [escalateBusy, setEscalateBusy] = useState(false);
   const [actionBusyId, setActionBusyId] = useState(null);
-  const [aiAutoReply, setAiAutoReply] = useState(true);
+  const [aiAutoReply, setAiAutoReply] = useState(false);
+  const [autoSendClarifications, setAutoSendClarifications] = useState(true);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState(null);
+  const [emergencyDisabled, setEmergencyDisabled] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -1202,6 +1251,41 @@ export default function App() {
     };
   }, [activeNav, loadEscalations]);
 
+  // Load server-controlled automation settings whenever the Settings tab opens.
+  useEffect(() => {
+    if (activeNav !== 'settings') return undefined;
+
+    let cancelled = false;
+
+    async function loadSettings() {
+      setSettingsLoading(true);
+      setSettingsError(null);
+      setSaveMessage('');
+
+      try {
+        const settings = await loadAutomationSettings(fetchWithAuth);
+        if (cancelled) return;
+
+        setAiAutoReply(settings.aiAutoReplyEnabled);
+        setAutoSendClarifications(settings.autoSendClarifications);
+        setEmergencyDisabled(settings.emergencyDisabled);
+      } catch (err) {
+        if (!cancelled) {
+          setSettingsError(
+            err.message || 'Failed to load automation settings'
+          );
+        }
+      } finally {
+        if (!cancelled) setSettingsLoading(false);
+      }
+    }
+
+    loadSettings();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeNav]);
+
   const header = HEADER_COPY[activeNav] ?? HEADER_COPY.inbox;
   const filteredConversations = filterConversationsBySearch(conversations, searchQuery);
   const pendingEscalations = escalationTickets.filter((t) => t.status === 'Pending').length;
@@ -1358,9 +1442,29 @@ export default function App() {
     }
   }
 
-  function handleSaveSettings() {
-    setSaveMessage('Preferences saved.');
-    setTimeout(() => setSaveMessage(''), 3000);
+  async function handleSaveSettings() {
+    if (settingsLoading || settingsSaving) return;
+
+    setSettingsSaving(true);
+    setSettingsError(null);
+    setSaveMessage('');
+
+    try {
+      const settings = await saveAutomationSettings(fetchWithAuth, {
+        aiAutoReplyEnabled: aiAutoReply,
+        autoSendClarifications,
+      });
+
+      setAiAutoReply(settings.aiAutoReplyEnabled);
+      setAutoSendClarifications(settings.autoSendClarifications);
+      setEmergencyDisabled(settings.emergencyDisabled);
+      setSaveMessage('Automation preferences saved.');
+      setTimeout(() => setSaveMessage(''), 3000);
+    } catch (err) {
+      setSettingsError(err.message || 'Failed to save automation settings');
+    } finally {
+      setSettingsSaving(false);
+    }
   }
 
   if (isLoading) {
@@ -1536,8 +1640,14 @@ export default function App() {
             <SettingsView
               aiAutoReply={aiAutoReply}
               setAiAutoReply={setAiAutoReply}
+              autoSendClarifications={autoSendClarifications}
+              setAutoSendClarifications={setAutoSendClarifications}
               onSave={handleSaveSettings}
               saveMessage={saveMessage}
+              settingsLoading={settingsLoading}
+              settingsSaving={settingsSaving}
+              settingsError={settingsError}
+              emergencyDisabled={emergencyDisabled}
             />
           )}
         </main>
