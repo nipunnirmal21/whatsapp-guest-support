@@ -10,12 +10,15 @@ const {
   updateDeliveryStatus,
 } = require('../../services/messages/dispatcher');
 const {
-  findReservationByPhone,
   findOrCreateConversation,
+  resolveReservationContext,
 } = require('../../services/reservations/lookup');
 const { runRulesEngine } = require('../../services/rules/engine');
 const { classifyAndDraft } = require('../../services/ai/classifier');
 const { handleAiOutcome } = require('../../services/ai/outcomeHandler');
+const {
+  isConversationAutomationPaused,
+} = require('../../services/conversations/automation');
 
 // ---------------------------------------------------------------------------
 // GET /webhooks/whatsapp  —  Meta webhook verification handshake
@@ -88,7 +91,7 @@ router.post('/', async (req, res) => {
             recipientPhone: status.recipient_id,
             timestamp: status.timestamp,
           });
-          updateDeliveryStatus(status).catch((err) =>
+          await updateDeliveryStatus(status).catch((err) =>
             logger.error('Failed to persist WhatsApp message status', {
               waMessageId: status.id,
               status: status.status,
@@ -199,12 +202,21 @@ async function processInboundMessage(message, contact) {
 
   logger.info('Processing inbound message', { from, messageType, displayName });
 
-  // Phase 3: match guest to active reservation by phone number
-  const reservationContext = await findReservationByPhone(from);
+  // Phase 3: phone first, then verified Booking ID, then provisional guest-name
+  // fallback. Explicit name-only matches never expose reservation context.
+  const reservationResolution = await resolveReservationContext({
+    phoneNumber: from,
+    messageText: textContent,
+  });
+  const reservationContext = reservationResolution.reservationContext;
   const reservationId = reservationContext?.reservation?.id ?? null;
 
-  // Phase 3: find or create the conversation thread for this guest / reservation
-  const conversation = await findOrCreateConversation(from, reservationId);
+  // Reuse an active unlinked conversation when a later Booking ID verifies it.
+  const conversation = await findOrCreateConversation(from, reservationId, {
+    status: reservationResolution.match.status,
+    method: reservationResolution.match.method,
+    candidateReservationId: reservationResolution.candidateReservationId,
+  });
 
   // Phase 3: store inbound message for audit trail and dashboard inbox
   const savedMessage = await saveInboundMessage(
@@ -225,6 +237,9 @@ async function processInboundMessage(message, contact) {
     conversationId: conversation.id,
     reservationId,
     reservationMatched: Boolean(reservationContext),
+    reservationMatchStatus: reservationResolution.match.status,
+    reservationMatchMethod: reservationResolution.match.method,
+    reservationMatchReason: reservationResolution.match.reason,
     guestName: reservationContext?.guest?.full_name ?? displayName,
     apartmentName: reservationContext?.apartment?.name ?? null,
     messageId: savedMessage?.id ?? null,
@@ -234,6 +249,18 @@ async function processInboundMessage(message, contact) {
 
   // Duplicate webhook delivery — message already stored; skip response pipeline
   if (!savedMessage) {
+    return;
+  }
+
+  // Human handover/manual mode owns the conversation. Keep storing inbound
+  // messages and read receipts, but do not run rules or AI auto-replies.
+  if (isConversationAutomationPaused(conversation)) {
+    logger.info('Automation skipped for human-owned conversation', {
+      conversationId: conversation.id,
+      status: conversation.status,
+      assignedTo: conversation.assigned_to ?? null,
+      inboundMessageId: savedMessage.id,
+    });
     return;
   }
 
@@ -269,7 +296,14 @@ async function processInboundMessage(message, contact) {
   }
 
   try {
-    const aiResult = await classifyAndDraft(textContent, reservationContext ?? {});
+    const aiContext = reservationContext ?? {
+      identity_verification: {
+        status: reservationResolution.match.status,
+        method: reservationResolution.match.method,
+        reason: reservationResolution.match.reason,
+      },
+    };
+    const aiResult = await classifyAndDraft(textContent, aiContext);
 
     await updateConversationAiState(
       conversation.id,
@@ -287,7 +321,7 @@ async function processInboundMessage(message, contact) {
     const outcome = await handleAiOutcome({
       conversation,
       aiResult,
-      reservationContext: reservationContext ?? {},
+      reservationContext: aiContext,
       inboundMessageId: savedMessage.id,
     });
 

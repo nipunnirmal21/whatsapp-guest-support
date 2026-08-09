@@ -1,0 +1,38 @@
+name: Database integration tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  escalation-concurrency:
+    name: Escalation concurrency against test database
+    runs-on: ubuntu-latest
+    environment: database-integration
+    env:
+      DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+
+      - name: Apply migrations to the dedicated test database
+        run: npm run migrate
+
+      - name: Run database integration tests
+        run: npm run test:integration

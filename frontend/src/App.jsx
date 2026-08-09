@@ -1,7 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
+import {
+  loadAutomationSettings,
+  saveAutomationSettings,
+} from './services/automationSettings.js';
+import {
+  takeOverEscalation,
+  assignConversation,
+  startManualMode,
+  resumeAutomation,
+  resolveConversation,
+} from './services/handover.js';
+import {
+  getDeliveryStatusPresentation,
+  normaliseDeliveryStatus,
+} from './services/messageDelivery.js';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 const DASHBOARD_API_KEY = import.meta.env.VITE_DASHBOARD_API_KEY || '';
+const ADMIN_USER_ID = import.meta.env.VITE_ADMIN_USER_ID || '';
 
 /**
  * Central authenticated fetch for all dashboard API calls.
@@ -12,6 +28,10 @@ async function fetchWithAuth(path, options = {}) {
 
   if (DASHBOARD_API_KEY) {
     headers.set('X-API-Key', DASHBOARD_API_KEY);
+  }
+
+  if (ADMIN_USER_ID) {
+    headers.set('X-Admin-User-Id', ADMIN_USER_ID);
   }
 
   if (options.body && !headers.has('Content-Type')) {
@@ -77,7 +97,8 @@ function calculateNights(checkin, checkout) {
 }
 
 function mapConversationStatus(convStatus, resStatus) {
-  if (convStatus === 'escalated' || convStatus === 'manual') return 'Escalated';
+  if (convStatus === 'manual') return 'Manual';
+  if (convStatus === 'escalated') return 'Escalated';
   if (convStatus === 'resolved') return 'Resolved';
   if (resStatus === 'checked_in') return 'Checked In';
   if (resStatus === 'checked_out') return 'Resolved';
@@ -99,6 +120,14 @@ function mapMessage(msg) {
     from,
     text: msg.content ?? msg.text ?? '',
     time: formatTime(msg.created_at) || msg.time || '',
+    deliveryStatus: normaliseDeliveryStatus(
+      msg.delivery_status ?? msg.deliveryStatus
+    ),
+    failureReason: msg.failure_reason ?? msg.failureReason ?? null,
+    sentAt: msg.sent_at ?? null,
+    deliveredAt: msg.delivered_at ?? null,
+    readAt: msg.read_at ?? null,
+    failedAt: msg.failed_at ?? null,
   };
 }
 
@@ -125,11 +154,15 @@ function normalizeConversation(raw) {
     unread: raw.unread ?? 0,
     aiInsight: raw.ai_classification ?? '—',
     aiDraft: raw.ai_draft ?? null,
+    assignedTo: raw.assigned_to ?? null,
+    assigneeName: raw.assignee?.name ?? null,
+    manualModeReason: raw.manual_mode_reason ?? null,
     messages,
     messagesLoaded: Array.isArray(raw.messages),
     reservation: {
       guests: raw.guest_count ?? 1,
       nights: calculateNights(reservation?.checkin_date, reservation?.checkout_date),
+      rawStatus: reservation?.status ?? null,
       source: reservation?.booking_source ?? '—',
       total: raw.total ?? '—',
       policy: raw.policy ?? 'Checkout per house policy',
@@ -159,6 +192,25 @@ function normalizeEscalation(raw) {
     time: formatRelativeTime(raw.created_at),
     status: statusMap[raw.status] ?? 'Pending',
     rawStatus: raw.status ?? 'pending',
+    assignedTo: raw.escalated_to ?? null,
+    assigneeName: raw.assignee?.name ?? null,
+  };
+}
+
+function mergeHandoverState(conversation, raw) {
+  const rawStatus = raw?.status ?? conversation.rawStatus;
+  const assignedTo = raw?.assigned_to ?? null;
+  return {
+    ...conversation,
+    rawStatus,
+    status: mapConversationStatus(rawStatus, conversation.reservation.rawStatus),
+    priority: rawStatus === 'manual' || rawStatus === 'escalated' ? 'escalated' : 'normal',
+    assignedTo,
+    assigneeName: assignedTo
+      ? raw?.assignee?.name ??
+        (assignedTo === conversation.assignedTo ? conversation.assigneeName : null)
+      : null,
+    manualModeReason: raw?.manual_mode_reason ?? null,
   };
 }
 
@@ -183,9 +235,11 @@ function computeAnalytics(conversations, escalations) {
     (e) => e.status === 'Pending' || e.status === 'Acknowledged'
   ).length;
   const resolved = conversations.filter((c) => c.status === 'Resolved').length;
-  const escalated = conversations.filter((c) => c.status === 'Escalated').length;
+  const escalated = conversations.filter(
+    (c) => c.status === 'Escalated' || c.status === 'Manual'
+  ).length;
   const open = conversations.filter(
-    (c) => c.status !== 'Resolved' && c.status !== 'Escalated'
+    (c) => c.status !== 'Resolved' && c.status !== 'Escalated' && c.status !== 'Manual'
   ).length;
 
   const withAi = conversations.filter(
@@ -330,6 +384,7 @@ function StatusBadge({ status }) {
     'Checked In': 'bg-[#C9A227]/15 text-[#C9A227] border-[#C9A227]/40',
     Confirmed: 'bg-white/10 text-white border-white/20',
     Escalated: 'bg-black text-[#C9A227] border-[#C9A227]/60',
+    Manual: 'bg-[#C9A227] text-[#0B1F3A] border-[#C9A227]',
     Resolved: 'bg-[#132B4F] text-white/70 border-[#1E3A5F]',
     Pending: 'bg-[#C9A227]/10 text-[#C9A227] border-[#C9A227]/40',
     Acknowledged: 'bg-white/10 text-white border-white/20',
@@ -356,6 +411,32 @@ function SeverityBadge({ severity }) {
   );
 }
 
+function MessageMeta({ message, inverted = false }) {
+  const delivery = getDeliveryStatusPresentation(message.deliveryStatus);
+  const mutedClass = inverted ? 'text-[#0B1F3A]/40' : 'text-white/40';
+  const statusClass = delivery?.tone === 'error'
+    ? 'text-red-300'
+    : delivery?.tone === 'success'
+      ? inverted
+        ? 'text-[#0B1F3A]/70'
+        : 'text-[#C9A227]'
+      : mutedClass;
+
+  return (
+    <div className={`mt-1 flex items-center justify-end gap-2 text-[10px] ${mutedClass}`}>
+      <span>{message.time}</span>
+      {delivery && (
+        <span
+          className={statusClass}
+          title={delivery.status === 'failed' ? message.failureReason ?? 'Delivery failed' : undefined}
+        >
+          {delivery.label}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function MessageBubble({ message }) {
   const isGuest = message.from === 'guest';
   const isSystem = message.from === 'system';
@@ -379,7 +460,7 @@ function MessageBubble({ message }) {
         <div className="max-w-[75%] rounded-2xl rounded-br-sm border border-[#C9A227]/30 bg-[#C9A227]/10 px-4 py-3 text-sm text-white shadow-lg">
           <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">Auto Reply</span>
           <p>{message.text}</p>
-          <span className="mt-1 block text-[10px] text-white/40">{message.time}</span>
+          <MessageMeta message={message} />
         </div>
       </div>
     );
@@ -391,7 +472,7 @@ function MessageBubble({ message }) {
         <div className="max-w-[75%] rounded-2xl rounded-br-sm border border-white/10 bg-white px-4 py-3 text-sm text-[#0B1F3A] shadow-lg">
           <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">AI Draft</span>
           <p>{message.text}</p>
-          <span className="mt-1 block text-[10px] text-[#0B1F3A]/40">{message.time}</span>
+          <MessageMeta message={message} inverted />
         </div>
       </div>
     );
@@ -403,7 +484,7 @@ function MessageBubble({ message }) {
         <div className="max-w-[75%] rounded-2xl rounded-br-sm border border-[#C9A227]/30 bg-[#C9A227]/10 px-4 py-3 text-sm text-white shadow-lg">
           <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-[#C9A227]">Operator</span>
           <p>{message.text}</p>
-          <span className="mt-1 block text-[10px] text-white/40">{message.time}</span>
+          <MessageMeta message={message} />
         </div>
       </div>
     );
@@ -412,7 +493,7 @@ function MessageBubble({ message }) {
   return null;
 }
 
-function ToggleSwitch({ enabled, onChange, label, description }) {
+function ToggleSwitch({ enabled, onChange, label, description, disabled = false }) {
   return (
     <div className="flex items-center justify-between gap-4 rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-5 py-4">
       <div>
@@ -423,10 +504,12 @@ function ToggleSwitch({ enabled, onChange, label, description }) {
         type="button"
         role="switch"
         aria-checked={enabled}
+        aria-disabled={disabled}
+        disabled={disabled}
         onClick={() => onChange(!enabled)}
         className={`relative h-7 w-12 shrink-0 rounded-full transition-colors duration-200 ${
           enabled ? 'bg-[#C9A227]' : 'bg-[#1E3A5F]'
-        }`}
+        } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
       >
         <span
           className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-md transition-transform duration-200 ${
@@ -462,9 +545,18 @@ function InboxView({
   sendError,
   messagesLoading,
   onEscalate,
+  adminUsers,
+  onAssignConversation,
+  onStartManualMode,
+  onResumeAutomation,
   escalateBusy,
+  actionBusyId,
 }) {
   const selected = conversations.find((c) => c.id === selectedId) ?? null;
+  const currentAdmin = adminUsers.find((user) => user.id === ADMIN_USER_ID);
+  const assignableUsers = ['supervisor', 'admin'].includes(currentAdmin?.role)
+    ? adminUsers
+    : adminUsers.filter((user) => user.id === ADMIN_USER_ID);
 
   if (!selected) {
     return (
@@ -516,7 +608,7 @@ function InboxView({
                       <p className="truncate text-sm font-semibold text-white">{convo.guest}</p>
                       {convo.priority === 'escalated' && (
                         <span className="shrink-0 rounded bg-black px-1.5 py-0.5 text-[9px] font-bold uppercase text-[#C9A227]">
-                          Esc
+                          {convo.rawStatus === 'manual' ? 'Man' : 'Esc'}
                         </span>
                       )}
                     </div>
@@ -553,21 +645,50 @@ function InboxView({
               <h3 className="text-base font-semibold text-white">{selected.guest}</h3>
               <p className="text-xs text-white/50">{selected.phone}</p>
             </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <StatusBadge status={selected.status} />
-            {selected.priority !== 'escalated' && (
+           </div>
+           <div className="flex items-center gap-2">
+             <StatusBadge status={selected.status} />
+            {selected.rawStatus === 'manual' ? (
               <button
                 type="button"
-                disabled={escalateBusy}
-                onClick={() => onEscalate(selected)}
-                className="rounded-lg border border-[#C9A227] bg-[#C9A227] px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-[#0B1F3A] transition hover:bg-[#D4AF37] disabled:opacity-50"
+                disabled={actionBusyId === selected.id}
+                onClick={() => onResumeAutomation(selected)}
+                className="rounded-lg border border-white/20 bg-[#132B4F] px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-white transition hover:border-[#C9A227] hover:text-[#C9A227] disabled:opacity-50"
               >
-                Escalate
+                Resume Automation
               </button>
-            )}
+            ) : selected.rawStatus !== 'resolved' ? (
+              <button
+                type="button"
+                disabled={actionBusyId === selected.id}
+                onClick={() => onStartManualMode(selected)}
+                className="rounded-lg border border-white/20 bg-[#132B4F] px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-white transition hover:border-[#C9A227] hover:text-[#C9A227] disabled:opacity-50"
+              >
+                {selected.rawStatus === 'escalated' ? 'Take Over' : 'Manual Mode'}
+              </button>
+            ) : null}
+            {selected.rawStatus !== 'manual' &&
+              selected.rawStatus !== 'escalated' &&
+              selected.rawStatus !== 'resolved' && (
+                <button
+                  type="button"
+                  disabled={escalateBusy}
+                  onClick={() => onEscalate(selected)}
+                  className="rounded-lg border border-[#C9A227] bg-[#C9A227] px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-[#0B1F3A] transition hover:bg-[#D4AF37] disabled:opacity-50"
+                >
+                  Escalate
+                </button>
+              )}
           </div>
         </div>
+
+        {(selected.rawStatus === 'manual' || selected.rawStatus === 'escalated') && (
+          <div className="border-b border-[#C9A227]/30 bg-black px-6 py-2 text-center text-xs text-[#C9A227]">
+            {selected.rawStatus === 'manual'
+              ? `Manual mode active${selected.assigneeName ? ` - ${selected.assigneeName}` : ''}. AI and rules auto-replies are paused.`
+              : 'Awaiting human takeover. AI and rules auto-replies are paused.'}
+          </div>
+        )}
 
         <div className="flex-1 space-y-4 overflow-y-auto px-6 py-6">
           <div className="mx-auto max-w-2xl rounded-xl border border-[#1E3A5F] bg-[#0B1F3A]/50 px-4 py-2 text-center">
@@ -672,14 +793,71 @@ function InboxView({
           </div>
 
           <div className="mt-4 space-y-2">
-            <button
-              type="button"
-              disabled={escalateBusy || selected.priority === 'escalated'}
-              onClick={() => onEscalate(selected)}
-              className="w-full rounded-xl border border-[#C9A227]/40 bg-black px-4 py-3 text-left text-sm font-medium text-[#C9A227] transition hover:bg-[#C9A227] hover:text-[#0B1F3A] disabled:opacity-40"
+            {selected.rawStatus === 'manual' ? (
+              <button
+                type="button"
+                disabled={actionBusyId === selected.id}
+                onClick={() => onResumeAutomation(selected)}
+                className="w-full rounded-xl border border-white/20 bg-[#132B4F] px-4 py-3 text-left text-sm font-medium text-white transition hover:border-[#C9A227] hover:text-[#C9A227] disabled:opacity-40"
+              >
+                Resume AI Automation
+              </button>
+            ) : selected.rawStatus !== 'resolved' ? (
+              <button
+                type="button"
+                disabled={actionBusyId === selected.id}
+                onClick={() => onStartManualMode(selected)}
+                className="w-full rounded-xl border border-white/20 bg-[#132B4F] px-4 py-3 text-left text-sm font-medium text-white transition hover:border-[#C9A227] hover:text-[#C9A227] disabled:opacity-40"
+              >
+                {selected.rawStatus === 'escalated' ? 'Take Over Conversation' : 'Start Manual Mode'}
+              </button>
+            ) : null}
+            {selected.rawStatus !== 'manual' &&
+              selected.rawStatus !== 'escalated' &&
+              selected.rawStatus !== 'resolved' && (
+                <button
+                  type="button"
+                  disabled={escalateBusy}
+                  onClick={() => onEscalate(selected)}
+                  className="w-full rounded-xl border border-[#C9A227]/40 bg-black px-4 py-3 text-left text-sm font-medium text-[#C9A227] transition hover:bg-[#C9A227] hover:text-[#0B1F3A] disabled:opacity-40"
+                >
+                  Escalate to Supervisor
+                </button>
+              )}
+          </div>
+
+          <div className="mt-4 rounded-xl border border-[#1E3A5F] bg-[#132B4F] p-4">
+            <label
+              htmlFor="conversation-assignee"
+              className="text-[10px] font-bold uppercase tracking-widest text-white/40"
             >
-              {selected.priority === 'escalated' ? 'Already Escalated' : 'Escalate to Supervisor'}
-            </button>
+              Assigned Operator
+            </label>
+            <select
+              id="conversation-assignee"
+              value={selected.assignedTo ?? ''}
+              disabled={
+                selected.rawStatus === 'resolved' ||
+                actionBusyId === selected.id ||
+                assignableUsers.length === 0
+              }
+              onChange={(event) => onAssignConversation(selected, event.target.value)}
+              className="mt-2 w-full rounded-lg border border-[#1E3A5F] bg-black px-3 py-2 text-sm text-white outline-none transition focus:border-[#C9A227] disabled:opacity-40"
+            >
+              <option value="" disabled>
+                Unassigned
+              </option>
+              {assignableUsers.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.name} ({user.role})
+                </option>
+              ))}
+            </select>
+            {assignableUsers.length === 0 && (
+              <p className="mt-2 text-[10px] text-[#C9A227]">
+                Configure VITE_ADMIN_USER_ID to enable assignment.
+              </p>
+            )}
           </div>
 
           <div className="mt-6 rounded-2xl border border-[#1E3A5F] bg-black p-4">
@@ -852,7 +1030,7 @@ function EscalationsView({ tickets, loading, error, onTakeOver, onResolve, onVie
                     </button>
                   ) : (
                     <span className="rounded-xl border border-white/20 bg-[#132B4F] px-5 py-2.5 text-center text-xs font-bold uppercase tracking-wide text-white/50">
-                      Assigned to You
+                      {ticket.assigneeName ? `Assigned to ${ticket.assigneeName}` : 'Assigned'}
                     </span>
                   )}
                   <button
@@ -948,8 +1126,14 @@ function AnalyticsView({ conversations = [], escalations = [] }) {
 function SettingsView({
   aiAutoReply,
   setAiAutoReply,
+  autoSendClarifications,
+  setAutoSendClarifications,
   onSave,
   saveMessage,
+  settingsLoading,
+  settingsSaving,
+  settingsError,
+  emergencyDisabled,
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[#132B4F] p-6">
@@ -968,9 +1152,36 @@ function SettingsView({
             <ToggleSwitch
               enabled={aiAutoReply}
               onChange={setAiAutoReply}
-              label="AI Auto-Reply"
-              description="Allow the rules engine and classifier to send automated WhatsApp replies without operator approval."
+              disabled={settingsLoading || settingsSaving}
+              label="AI Safe Replies"
+              description="Automatically send safe AI drafts only when an active reservation is matched. Rules-based replies are controlled separately by the backend."
             />
+            <div className="mt-3">
+              <ToggleSwitch
+                enabled={autoSendClarifications}
+                onChange={setAutoSendClarifications}
+                disabled={settingsLoading || settingsSaving}
+                label="Clarification Questions"
+                description="Automatically ask guests for missing booking or request details when the AI needs clarification."
+              />
+            </div>
+
+            {emergencyDisabled && (
+              <div className="mt-3 rounded-xl border border-[#C9A227]/50 bg-black px-4 py-3">
+                <p className="text-xs font-semibold text-[#C9A227]">
+                  Emergency override active
+                </p>
+                <p className="mt-1 text-xs text-white/50">
+                  All AI automatic messages are forced off by the backend environment setting.
+                </p>
+              </div>
+            )}
+
+            {settingsError && (
+              <div className="mt-3 rounded-xl border border-[#C9A227]/40 bg-black px-4 py-3 text-xs text-[#C9A227]">
+                {settingsError}
+              </div>
+            )}
           </section>
 
           <section className="rounded-xl border border-[#1E3A5F] bg-[#0B1F3A]/60 p-4">
@@ -988,14 +1199,19 @@ function SettingsView({
             {saveMessage ? (
               <p className="text-sm font-medium text-[#C9A227]">{saveMessage}</p>
             ) : (
-              <p className="text-xs text-white/40">Preferences are stored in this browser session only.</p>
+              <p className="text-xs text-white/40">
+                {settingsLoading
+                  ? 'Loading automation settings...'
+                  : 'Preferences are stored securely in the backend database.'}
+              </p>
             )}
             <button
               type="button"
               onClick={onSave}
-              className="rounded-xl bg-[#C9A227] px-6 py-3 text-sm font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37]"
+              disabled={settingsLoading || settingsSaving}
+              className="rounded-xl bg-[#C9A227] px-6 py-3 text-sm font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Save Preferences
+              {settingsSaving ? 'Saving...' : 'Save Preferences'}
             </button>
           </div>
         </div>
@@ -1010,6 +1226,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [replyText, setReplyText] = useState('');
   const [escalationTickets, setEscalationTickets] = useState([]);
+  const [adminUsers, setAdminUsers] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [escalationsLoading, setEscalationsLoading] = useState(false);
@@ -1018,7 +1235,12 @@ export default function App() {
   const [sendError, setSendError] = useState(null);
   const [escalateBusy, setEscalateBusy] = useState(false);
   const [actionBusyId, setActionBusyId] = useState(null);
-  const [aiAutoReply, setAiAutoReply] = useState(true);
+  const [aiAutoReply, setAiAutoReply] = useState(false);
+  const [autoSendClarifications, setAutoSendClarifications] = useState(true);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState(null);
+  const [emergencyDisabled, setEmergencyDisabled] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -1036,6 +1258,11 @@ export default function App() {
     return (json.data ?? [])
       .map(normalizeEscalation)
       .filter((t) => t.rawStatus !== 'resolved');
+  }, []);
+
+  const loadAdminUsers = useCallback(async () => {
+    const json = await fetchWithAuth('/api/admin-users');
+    return json.data ?? [];
   }, []);
 
   /** Merge list poll into state without wiping loaded message threads */
@@ -1061,11 +1288,16 @@ export default function App() {
   }, []);
 
   const refreshDashboard = useCallback(async () => {
-    const [convos, tickets] = await Promise.all([loadConversations(), loadEscalations()]);
+    const [convos, tickets, users] = await Promise.all([
+      loadConversations(),
+      loadEscalations(),
+      loadAdminUsers(),
+    ]);
     setConversations(convos);
     setEscalationTickets(tickets);
+    setAdminUsers(users);
     return convos;
-  }, [loadConversations, loadEscalations]);
+  }, [loadAdminUsers, loadConversations, loadEscalations]);
 
   // Initial load
   useEffect(() => {
@@ -1202,6 +1434,41 @@ export default function App() {
     };
   }, [activeNav, loadEscalations]);
 
+  // Load server-controlled automation settings whenever the Settings tab opens.
+  useEffect(() => {
+    if (activeNav !== 'settings') return undefined;
+
+    let cancelled = false;
+
+    async function loadSettings() {
+      setSettingsLoading(true);
+      setSettingsError(null);
+      setSaveMessage('');
+
+      try {
+        const settings = await loadAutomationSettings(fetchWithAuth);
+        if (cancelled) return;
+
+        setAiAutoReply(settings.aiAutoReplyEnabled);
+        setAutoSendClarifications(settings.autoSendClarifications);
+        setEmergencyDisabled(settings.emergencyDisabled);
+      } catch (err) {
+        if (!cancelled) {
+          setSettingsError(
+            err.message || 'Failed to load automation settings'
+          );
+        }
+      } finally {
+        if (!cancelled) setSettingsLoading(false);
+      }
+    }
+
+    loadSettings();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeNav]);
+
   const header = HEADER_COPY[activeNav] ?? HEADER_COPY.inbox;
   const filteredConversations = filterConversationsBySearch(conversations, searchQuery);
   const pendingEscalations = escalationTickets.filter((t) => t.status === 'Pending').length;
@@ -1209,6 +1476,16 @@ export default function App() {
   const activeStays = conversations.filter(
     (c) => c.status === 'Checked In' || c.status === 'Confirmed'
   ).length;
+  const currentAdminUser = adminUsers.find((user) => user.id === ADMIN_USER_ID) ?? null;
+  const currentAdminName = currentAdminUser?.name ?? 'Operator not configured';
+  const currentAdminInitials = currentAdminUser?.name
+    ? currentAdminUser.name
+        .split(' ')
+        .map((part) => part[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase()
+    : '?';
 
   async function handleSendMessage() {
     const trimmed = replyText.trim();
@@ -1228,6 +1505,7 @@ export default function App() {
       from: 'human',
       text: trimmed,
       time: 'Just now',
+      deliveryStatus: 'pending',
     };
 
     setConversations((prev) =>
@@ -1262,6 +1540,11 @@ export default function App() {
                   messages: convo.messages.map((msg) =>
                     msg.id === optimisticId ? serverMessage : msg
                   ),
+                  status: 'Manual',
+                  rawStatus: 'manual',
+                  priority: 'escalated',
+                  assignedTo: ADMIN_USER_ID || convo.assignedTo,
+                  assigneeName: currentAdminUser?.name ?? convo.assigneeName,
                 }
               : convo
           )
@@ -1317,13 +1600,150 @@ export default function App() {
     }
   }
 
-  function handleTakeOver(ticket) {
-    setEscalationTickets((prev) =>
-      prev.map((t) => (t.id === ticket.id ? { ...t, status: 'Acknowledged' } : t))
-    );
-    if (ticket.conversationId) {
-      setSelectedId(ticket.conversationId);
-      setActiveNav('inbox');
+  async function handleTakeOver(ticket) {
+    if (!ticket?.id || actionBusyId) return;
+    setActionBusyId(ticket.id);
+    setEscalationsError(null);
+
+    try {
+      const result = await takeOverEscalation(fetchWithAuth, ticket.id);
+      const assigneeName = currentAdminUser?.name ?? null;
+
+      setEscalationTickets((prev) =>
+        prev.map((t) =>
+          t.id === ticket.id
+            ? {
+                ...t,
+                status: 'Acknowledged',
+                rawStatus: 'acknowledged',
+                assignedTo: result.escalation?.escalated_to ?? ADMIN_USER_ID,
+                assigneeName,
+              }
+            : t
+        )
+      );
+
+      if (ticket.conversationId) {
+        setConversations((prev) =>
+          prev.map((conversation) =>
+            conversation.id === ticket.conversationId
+              ? { ...mergeHandoverState(conversation, result.conversation), assigneeName }
+              : conversation
+          )
+        );
+        setSelectedId(ticket.conversationId);
+        setActiveNav('inbox');
+      }
+    } catch (err) {
+      setEscalationsError(err.message || 'Failed to take over escalation');
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
+  async function handleStartManualMode(conversation) {
+    if (!conversation?.id || actionBusyId) return;
+    setActionBusyId(conversation.id);
+    setSendError(null);
+
+    try {
+      const updated = await startManualMode(
+        fetchWithAuth,
+        conversation.id,
+        conversation.rawStatus === 'escalated'
+          ? 'Operator took over escalated conversation'
+          : 'Operator started manual mode'
+      );
+
+      setConversations((prev) =>
+        prev.map((item) =>
+          item.id === conversation.id
+            ? {
+                ...mergeHandoverState(item, updated),
+                assigneeName: currentAdminUser?.name ?? null,
+              }
+            : item
+        )
+      );
+      setEscalationTickets((prev) =>
+        prev.map((ticket) =>
+          ticket.conversationId === conversation.id
+            ? {
+                ...ticket,
+                status: 'Acknowledged',
+                rawStatus: 'acknowledged',
+                assignedTo: updated.assigned_to,
+                assigneeName: currentAdminUser?.name ?? null,
+              }
+            : ticket
+        )
+      );
+    } catch (err) {
+      setSendError(err.message || 'Failed to start manual mode');
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
+  async function handleAssignConversation(conversation, assignedTo) {
+    if (!conversation?.id || !assignedTo || actionBusyId) return;
+    setActionBusyId(conversation.id);
+    setSendError(null);
+
+    try {
+      const updated = await assignConversation(
+        fetchWithAuth,
+        conversation.id,
+        assignedTo
+      );
+      const assigneeName = adminUsers.find((user) => user.id === assignedTo)?.name ?? null;
+
+      setConversations((prev) =>
+        prev.map((item) =>
+          item.id === conversation.id
+            ? { ...mergeHandoverState(item, updated), assigneeName }
+            : item
+        )
+      );
+      setEscalationTickets((prev) =>
+        prev.map((ticket) =>
+          ticket.conversationId === conversation.id
+            ? {
+                ...ticket,
+                status: 'Acknowledged',
+                rawStatus: 'acknowledged',
+                assignedTo,
+                assigneeName,
+              }
+            : ticket
+        )
+      );
+    } catch (err) {
+      setSendError(err.message || 'Failed to assign conversation');
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
+  async function handleResumeAutomation(conversation) {
+    if (!conversation?.id || actionBusyId) return;
+    setActionBusyId(conversation.id);
+    setSendError(null);
+
+    try {
+      const updated = await resumeAutomation(fetchWithAuth, conversation.id);
+      setConversations((prev) =>
+        prev.map((item) =>
+          item.id === conversation.id ? mergeHandoverState(item, updated) : item
+        )
+      );
+      setEscalationTickets((prev) =>
+        prev.filter((ticket) => ticket.conversationId !== conversation.id)
+      );
+    } catch (err) {
+      setSendError(err.message || 'Failed to resume automation');
+    } finally {
+      setActionBusyId(null);
     }
   }
 
@@ -1332,15 +1752,12 @@ export default function App() {
     setActionBusyId(ticket.id);
     setEscalationsError(null);
     try {
-      await fetchWithAuth('/api/escalations/resolve', {
-        method: 'POST',
-        body: JSON.stringify({ conversationId: ticket.conversationId }),
-      });
+      const updated = await resolveConversation(fetchWithAuth, ticket.conversationId);
       setEscalationTickets((prev) => prev.filter((t) => t.id !== ticket.id));
       setConversations((prev) =>
         prev.map((c) =>
           c.id === ticket.conversationId
-            ? { ...c, status: 'Resolved', priority: 'normal', rawStatus: 'resolved' }
+            ? mergeHandoverState(c, updated)
             : c
         )
       );
@@ -1358,9 +1775,29 @@ export default function App() {
     }
   }
 
-  function handleSaveSettings() {
-    setSaveMessage('Preferences saved.');
-    setTimeout(() => setSaveMessage(''), 3000);
+  async function handleSaveSettings() {
+    if (settingsLoading || settingsSaving) return;
+
+    setSettingsSaving(true);
+    setSettingsError(null);
+    setSaveMessage('');
+
+    try {
+      const settings = await saveAutomationSettings(fetchWithAuth, {
+        aiAutoReplyEnabled: aiAutoReply,
+        autoSendClarifications,
+      });
+
+      setAiAutoReply(settings.aiAutoReplyEnabled);
+      setAutoSendClarifications(settings.autoSendClarifications);
+      setEmergencyDisabled(settings.emergencyDisabled);
+      setSaveMessage('Automation preferences saved.');
+      setTimeout(() => setSaveMessage(''), 3000);
+    } catch (err) {
+      setSettingsError(err.message || 'Failed to save automation settings');
+    } finally {
+      setSettingsSaving(false);
+    }
   }
 
   if (isLoading) {
@@ -1478,11 +1915,13 @@ export default function App() {
 
             <div className="flex items-center gap-3 rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-3 py-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#C9A227] text-xs font-bold text-[#0B1F3A]">
-                KS
+                {currentAdminInitials}
               </div>
               <div className="hidden sm:block">
-                <p className="text-sm font-medium text-white">Kavish Silva</p>
-                <p className="text-[10px] text-[#C9A227]">Operations Manager</p>
+                <p className="text-sm font-medium text-white">{currentAdminName}</p>
+                <p className="text-[10px] capitalize text-[#C9A227]">
+                  {currentAdminUser?.role ?? 'Set VITE_ADMIN_USER_ID'}
+                </p>
               </div>
             </div>
           </div>
@@ -1506,7 +1945,12 @@ export default function App() {
               sendError={sendError}
               messagesLoading={messagesLoading}
               onEscalate={handleEscalate}
+              adminUsers={adminUsers}
+              onAssignConversation={handleAssignConversation}
+              onStartManualMode={handleStartManualMode}
+              onResumeAutomation={handleResumeAutomation}
               escalateBusy={escalateBusy}
+              actionBusyId={actionBusyId}
             />
           )}
 
@@ -1536,8 +1980,14 @@ export default function App() {
             <SettingsView
               aiAutoReply={aiAutoReply}
               setAiAutoReply={setAiAutoReply}
+              autoSendClarifications={autoSendClarifications}
+              setAutoSendClarifications={setAutoSendClarifications}
               onSave={handleSaveSettings}
               saveMessage={saveMessage}
+              settingsLoading={settingsLoading}
+              settingsSaving={settingsSaving}
+              settingsError={settingsError}
+              emergencyDisabled={emergencyDisabled}
             />
           )}
         </main>

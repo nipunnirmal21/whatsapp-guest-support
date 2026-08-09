@@ -4,7 +4,6 @@ const assert = require('node:assert/strict');
 const {
   HOLDING_MESSAGE,
   createAiOutcomeHandler,
-  parseBoolean,
 } = require('../src/services/ai/outcomeHandler');
 
 const conversation = {
@@ -30,8 +29,12 @@ function createHarness({
 
   const handler = createAiOutcomeHandler({
     logger,
-    safeAutoReplyEnabled,
-    autoSendClarifications,
+    async getAutomationSettings() {
+      return {
+        effectiveAiAutoReplyEnabled: safeAutoReplyEnabled,
+        effectiveAutoSendClarifications: autoSendClarifications,
+      };
+    },
     async dispatchTextMessage(payload) {
       dispatched.push(payload);
       if (dispatchError) throw dispatchError;
@@ -55,13 +58,6 @@ function createHarness({
 
   return { handler, dispatched, escalations, states };
 }
-
-test('parseBoolean uses safe defaults and recognises true', () => {
-  assert.equal(parseBoolean(undefined, false), false);
-  assert.equal(parseBoolean(undefined, true), true);
-  assert.equal(parseBoolean('TRUE', false), true);
-  assert.equal(parseBoolean('false', true), false);
-});
 
 test('safe_reply waits for operator approval when auto reply is disabled', async () => {
   const harness = createHarness({ safeAutoReplyEnabled: false });

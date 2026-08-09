@@ -3,6 +3,12 @@ const router = express.Router();
 const supabase = require('../../db/client');
 const logger = require('../../utils/logger');
 const { dispatchTextMessage } = require('../../services/messages/dispatcher');
+const requireOperator = require('../../middleware/requireOperator');
+const {
+  assignConversation,
+  startManualMode,
+  resumeAutomation,
+} = require('../../services/handover/service');
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -23,6 +29,12 @@ router.get('/', async (req, res, next) => {
       .select(
         `
         *,
+        assignee:admin_users!conversations_assigned_to_fkey (
+          id,
+          name,
+          email,
+          role
+        ),
         reservation:reservations (
           id,
           booking_source,
@@ -78,6 +90,12 @@ router.get('/:id', async (req, res, next) => {
       .select(
         `
         *,
+        assignee:admin_users!conversations_assigned_to_fkey (
+          id,
+          name,
+          email,
+          role
+        ),
         reservation:reservations (
           id,
           booking_source,
@@ -147,12 +165,100 @@ router.get('/:id', async (req, res, next) => {
 });
 
 /**
+ * PATCH /api/conversations/:id/assignment
+ * Assigns the conversation to an operator and enables manual mode.
+ *
+ * Body: { assignedTo: string }
+ */
+router.patch('/:id/assignment', requireOperator, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { assignedTo } = req.body ?? {};
+
+    if (!isValidUuid(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid conversation id' });
+    }
+
+    if (!isValidUuid(assignedTo)) {
+      return res.status(400).json({ success: false, error: 'Invalid assignedTo' });
+    }
+
+    const conversation = await assignConversation({
+      conversationId: id,
+      actorId: req.adminUserId,
+      assignedTo,
+    });
+
+    return res.status(200).json({ success: true, data: conversation });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/conversations/:id/manual-mode
+ * Claims a conversation for the current operator and pauses automation.
+ *
+ * Body: { reason?: string }
+ */
+router.post('/:id/manual-mode', requireOperator, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : null;
+
+    if (!isValidUuid(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid conversation id' });
+    }
+
+    if (reason && reason.length > 500) {
+      return res.status(400).json({
+        success: false,
+        error: 'Manual mode reason must be 500 characters or fewer',
+      });
+    }
+
+    const conversation = await startManualMode({
+      conversationId: id,
+      operatorId: req.adminUserId,
+      reason,
+    });
+
+    return res.status(200).json({ success: true, data: conversation });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/conversations/:id/resume-automation
+ * Releases the assignment and returns the conversation to automation.
+ */
+router.post('/:id/resume-automation', requireOperator, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!isValidUuid(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid conversation id' });
+    }
+
+    const conversation = await resumeAutomation({
+      conversationId: id,
+      operatorId: req.adminUserId,
+    });
+
+    return res.status(200).json({ success: true, data: conversation });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * POST /api/conversations/:id/reply
  * Sends a human-authored reply from the dashboard to the guest.
  *
  * Body: { content: string }
  */
-router.post('/:id/reply', async (req, res, next) => {
+router.post('/:id/reply', requireOperator, async (req, res, next) => {
   try {
     const { id } = req.params;
     const { content } = req.body;
@@ -185,6 +291,12 @@ router.post('/:id/reply', async (req, res, next) => {
     if (!conversation) {
       return res.status(404).json({ success: false, error: 'Conversation not found' });
     }
+
+    await startManualMode({
+      conversationId: conversation.id,
+      operatorId: req.adminUserId,
+      reason: 'Operator sent a dashboard reply',
+    });
 
     const dispatched = await dispatchTextMessage({
       conversationId: conversation.id,

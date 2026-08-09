@@ -18,6 +18,8 @@ const messagesRouter         = require('./routes/api/messages');
 const conversationsRouter    = require('./routes/api/conversations');
 const escalationsRouter      = require('./routes/api/escalations');
 const intentsRouter          = require('./routes/api/intents');
+const settingsRouter         = require('./routes/api/settings');
+const adminUsersRouter       = require('./routes/api/adminUsers');
 
 const app = express();
 
@@ -88,6 +90,17 @@ const sendLimiter = rateLimit({
   message: { error: 'Send rate limit reached.' },
 });
 app.use('/api/messages/send', sendLimiter);
+
+// AI classification is comparatively expensive; keep previews from being
+// used as an unbounded LLM proxy.
+const classifyLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Classification rate limit reached.' },
+});
+app.use('/api/intents/classify', classifyLimiter);
 
 // ---------------------------------------------------------------------------
 // Health endpoint — verifies process + database reachability
@@ -160,6 +173,8 @@ app.use('/api/messages',      messagesRouter);
 app.use('/api/conversations', conversationsRouter);
 app.use('/api/escalations',   escalationsRouter);
 app.use('/api/intents',       intentsRouter);
+app.use('/api/settings',      settingsRouter);
+app.use('/api/admin-users',   adminUsersRouter);
 
 // ---------------------------------------------------------------------------
 // 404 handler

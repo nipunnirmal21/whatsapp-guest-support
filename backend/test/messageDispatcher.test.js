@@ -2,11 +2,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  extractFailureMetadata,
+  normaliseProviderTimestamp,
   createMessageDispatcher,
   serialiseFailureReason,
 } = require('../src/services/messages/dispatcher');
 
-function createHarness({ sendError = null, statusMessage = { id: 'message-1' } } = {}) {
+function createHarness({
+  sendError = null,
+  statusMessage = { id: 'message-1', delivery_status: 'sent' },
+} = {}) {
   const calls = [];
   const logger = { info() {}, warn() {}, error() {} };
 
@@ -53,7 +58,7 @@ test('outbound message is persisted before it is sent', async () => {
 
   assert.deepEqual(
     harness.calls.map(([name]) => name),
-    ['insert', 'send', 'sent', 'touch']
+    ['insert', 'send', 'sent', 'status', 'touch']
   );
   assert.equal(result.waMessageId, 'wamid-1');
   assert.equal(result.message.delivery_status, 'sent');
@@ -85,20 +90,78 @@ test('delivery status event updates its outbound message', async () => {
   const result = await harness.dispatcher.updateDeliveryStatus({
     id: 'wamid-1',
     status: 'delivered',
+    timestamp: '1786280000',
+    recipient_id: '94770000000',
   });
 
   assert.equal(result.id, 'message-1');
-  assert.deepEqual(harness.calls[0], [
-    'status',
-    {
-      waMessageId: 'wamid-1',
-      deliveryStatus: 'delivered',
-      failureReason: null,
-    },
-  ]);
+  assert.equal(harness.calls[0][0], 'status');
+  assert.equal(harness.calls[0][1].waMessageId, 'wamid-1');
+  assert.equal(harness.calls[0][1].deliveryStatus, 'delivered');
+  assert.equal(
+    harness.calls[0][1].providerTimestamp,
+    new Date(1786280000 * 1000).toISOString()
+  );
+  assert.equal(harness.calls[0][1].recipientPhone, '94770000000');
+  assert.equal(harness.calls[0][1].failureReason, null);
+});
+
+test('failed provider event stores structured and bounded failure metadata', async () => {
+  const harness = createHarness({
+    statusMessage: { id: 'message-1', delivery_status: 'failed' },
+  });
+
+  await harness.dispatcher.updateDeliveryStatus({
+    id: 'wamid-1',
+    status: 'failed',
+    errors: [
+      {
+        code: 131026,
+        title: 'Message undeliverable',
+        error_data: { details: 'Recipient unavailable' },
+      },
+    ],
+  });
+
+  const payload = harness.calls[0][1];
+  assert.equal(payload.failureCode, '131026');
+  assert.match(payload.failureReason, /Message undeliverable/);
+  assert.equal(payload.failureDetails.error_data.details, 'Recipient unavailable');
+});
+
+test('unsupported or malformed statuses are ignored before database access', async () => {
+  const harness = createHarness();
+
+  assert.equal(
+    await harness.dispatcher.updateDeliveryStatus({ id: 'wamid-1', status: 'deleted' }),
+    null
+  );
+  assert.equal(await harness.dispatcher.updateDeliveryStatus({ status: 'read' }), null);
+  assert.deepEqual(harness.calls, []);
+});
+
+test('status received before the outbound row is linked remains buffered', async () => {
+  const harness = createHarness({
+    statusMessage: { message: null, buffered: true, applied: false },
+  });
+
+  const result = await harness.dispatcher.updateDeliveryStatus({
+    id: 'wamid-early',
+    status: 'delivered',
+    timestamp: '1786280000',
+  });
+
+  assert.equal(result, null);
+  assert.equal(harness.calls[0][0], 'status');
 });
 
 test('failure reasons are bounded before database persistence', () => {
   const reason = serialiseFailureReason({ message: 'x'.repeat(2000) });
   assert.equal(reason.length, 1000);
+});
+
+test('provider timestamp and failure helpers reject invalid data safely', () => {
+  assert.equal(normaliseProviderTimestamp('not-a-timestamp'), null);
+  assert.equal(normaliseProviderTimestamp(null), null);
+  assert.equal(extractFailureMetadata({ status: 'read' }).failureCode, null);
 });
