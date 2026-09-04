@@ -20,12 +20,6 @@ const {
   isConversationAutomationPaused,
 } = require('../../services/conversations/automation');
 
-const ACTIVE_ESCALATION_STATUSES = ['pending', 'acknowledged'];
-const HUMAN_HANDOVER_MESSAGE =
-  'Thanks. I’ve passed this to our support team and someone will assist you shortly.';
-const CLARIFICATION_FALLBACK_MESSAGE =
-  'Could you please share a few more details so we can help you?';
-
 // ---------------------------------------------------------------------------
 // GET /webhooks/whatsapp  —  Meta webhook verification handshake
 // ---------------------------------------------------------------------------
@@ -123,11 +117,7 @@ router.post('/', async (req, res) => {
           });
 
           // Dispatch to the message processor (non-blocking)
-<<<<<<< Updated upstream
-          processInboundMessage(message, contact).catch((err) =>
-=======
           processInboundMessage(message).catch((err) =>
->>>>>>> Stashed changes
             logger.error('Error processing inbound message', {
               waMessageId: message.id,
               error: err.message,
@@ -200,143 +190,13 @@ async function updateConversationAiState(
 }
 
 // ---------------------------------------------------------------------------
-// sendAndSaveReply  —  persist only after WhatsApp accepts the send request
-// ---------------------------------------------------------------------------
-async function sendAndSaveReply(conversationId, to, content, source) {
-  let sendResult;
-
-  try {
-    sendResult = await sendTextMessage(to, content);
-  } catch (err) {
-    logger.error('Failed to send outbound WhatsApp reply', {
-      conversationId,
-      source,
-      error: err.message,
-    });
-    return { sent: false, persisted: false };
-  }
-
-  const waMessageId = sendResult?.messages?.[0]?.id ?? null;
-
-  try {
-    await saveOutboundMessage(conversationId, content, waMessageId, source);
-  } catch (err) {
-    logger.error('WhatsApp reply sent but outbound message persistence failed', {
-      conversationId,
-      source,
-      waMessageId,
-      error: err.message,
-    });
-    return { sent: true, persisted: false, waMessageId };
-  }
-
-  logger.info('Outbound WhatsApp reply sent and persisted', {
-    conversationId,
-    source,
-    waMessageId,
-  });
-
-  return { sent: true, persisted: true, waMessageId };
-}
-
-// ---------------------------------------------------------------------------
-// ensureActiveEscalation  —  create one open handover per conversation
-// ---------------------------------------------------------------------------
-async function ensureActiveEscalation(conversationId, reason) {
-  const { data: existing, error: findError } = await supabase
-    .from('escalations')
-    .select('id, status')
-    .eq('conversation_id', conversationId)
-    .in('status', ACTIVE_ESCALATION_STATUSES)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (findError) {
-    throw new Error(`Failed to check active escalations: ${findError.message}`);
-  }
-
-  if (existing) {
-    const { error: updateError } = await supabase
-      .from('conversations')
-      .update({ status: 'escalated' })
-      .eq('id', conversationId);
-
-    if (updateError) {
-      throw new Error(`Failed to mark conversation as escalated: ${updateError.message}`);
-    }
-
-    logger.info('Reused active conversation escalation', {
-      conversationId,
-      escalationId: existing.id,
-      escalationStatus: existing.status,
-    });
-
-    return { escalation: existing, created: false };
-  }
-
-  const { data: escalation, error: escalationError } = await supabase
-    .from('escalations')
-    .insert({
-      conversation_id: conversationId,
-      reason,
-      status: 'pending',
-    })
-    .select('id, status')
-    .single();
-
-  if (escalationError) {
-    throw new Error(`Failed to create escalation: ${escalationError.message}`);
-  }
-
-  const { error: updateError } = await supabase
-    .from('conversations')
-    .update({ status: 'escalated' })
-    .eq('id', conversationId);
-
-  if (updateError) {
-    throw new Error(`Failed to mark conversation as escalated: ${updateError.message}`);
-  }
-
-  logger.info('Created active conversation escalation', {
-    conversationId,
-    escalationId: escalation.id,
-  });
-
-  return { escalation, created: true };
-}
-
-async function handOverToHuman(conversationId, to, reason) {
-  try {
-    await ensureActiveEscalation(conversationId, reason);
-  } catch (err) {
-    logger.error('Failed to complete human handover', {
-      conversationId,
-      error: err.message,
-    });
-    return;
-  }
-
-  await sendAndSaveReply(
-    conversationId,
-    to,
-    HUMAN_HANDOVER_MESSAGE,
-    'system'
-  );
-}
-
-// ---------------------------------------------------------------------------
 // processInboundMessage  —  async pipeline
 // ---------------------------------------------------------------------------
 //   Phase 3 ✅ guest / reservation lookup, conversation storage
 //   Phase 4 ✅ rules engine + AI layer
 //   Phase 5 ✅ AI replies and escalation integration
 // ---------------------------------------------------------------------------
-<<<<<<< Updated upstream
-async function processInboundMessage(message, contact) {
-=======
 async function processInboundMessage(message) {
->>>>>>> Stashed changes
   const from        = message.from;
   const messageType = message.type;
   const textContent = extractTextFromMessage(message);
@@ -381,14 +241,9 @@ async function processInboundMessage(message) {
     conversationId: conversation.id,
     reservationId,
     reservationMatched: Boolean(reservationContext),
-<<<<<<< Updated upstream
     reservationMatchStatus: reservationResolution.match.status,
     reservationMatchMethod: reservationResolution.match.method,
     reservationMatchReason: reservationResolution.match.reason,
-    guestName: reservationContext?.guest?.full_name ?? displayName,
-    apartmentName: reservationContext?.apartment?.name ?? null,
-=======
->>>>>>> Stashed changes
     messageId: savedMessage?.id ?? null,
     messageType,
     hasText: Boolean(textContent),
@@ -416,11 +271,17 @@ async function processInboundMessage(message) {
   const apartment = reservationContext?.apartment
     ? { ...reservationContext.apartment, policy: reservationContext.policy ?? null }
     : null;
+  const aiContext = reservationContext ?? {
+    identity_verification: {
+      status: reservationResolution.match.status,
+      method: reservationResolution.match.method,
+      reason: reservationResolution.match.reason,
+    },
+  };
 
   const rulesResult = await runRulesEngine(textContent, reservation, apartment);
 
   if (rulesResult.outcome === 'auto_reply' && rulesResult.reply) {
-<<<<<<< Updated upstream
     try {
       const dispatched = await dispatchTextMessage({
         conversationId: conversation.id,
@@ -439,42 +300,37 @@ async function processInboundMessage(message) {
         error: err.message,
       });
     }
-=======
-    await sendAndSaveReply(
-      conversation.id,
-      from,
-      rulesResult.reply,
-      'system'
-    );
->>>>>>> Stashed changes
 
     return;
   }
 
-<<<<<<< Updated upstream
-  try {
-    const aiContext = reservationContext ?? {
-      identity_verification: {
-        status: reservationResolution.match.status,
-        method: reservationResolution.match.method,
-        reason: reservationResolution.match.reason,
-      },
-    };
-    const aiResult = await classifyAndDraft(textContent, aiContext);
-=======
   if (rulesResult.outcome === 'human_handover') {
-    await handOverToHuman(
-      conversation.id,
-      from,
-      rulesResult.reason ?? 'deterministic rules requested human handover'
-    );
+    try {
+      const outcome = await handleAiOutcome({
+        conversation,
+        aiResult: { classification: 'human_handover', draft: null },
+        reservationContext: aiContext,
+        inboundMessageId: savedMessage.id,
+      });
+
+      logger.info('Rules engine human handover completed', {
+        conversationId: conversation.id,
+        reason: rulesResult.reason ?? null,
+        action: outcome.action,
+      });
+    } catch (err) {
+      logger.error('Failed to handle rules engine human handover', {
+        conversationId: conversation.id,
+        reason: rulesResult.reason ?? null,
+        error: err.message,
+      });
+    }
     return;
   }
->>>>>>> Stashed changes
 
   let aiResult;
   try {
-    aiResult = await classifyAndDraft(textContent, reservationContext ?? {});
+    aiResult = await classifyAndDraft(textContent, aiContext);
   } catch (err) {
     logger.error('Failed to classify inbound message', {
       conversationId: conversation.id,
@@ -482,7 +338,7 @@ async function processInboundMessage(message) {
     });
     aiResult = {
       classification: 'human_handover',
-      draft: HUMAN_HANDOVER_MESSAGE,
+      draft: null,
     };
   }
 
@@ -493,14 +349,15 @@ async function processInboundMessage(message) {
       aiResult.draft,
       savedMessage.id
     );
-<<<<<<< Updated upstream
-
-    logger.info('Conversation updated with AI classification', {
+  } catch (err) {
+    // The guest response/handover must continue even when dashboard AI metadata fails.
+    logger.error('Failed to persist conversation AI state', {
       conversationId: conversation.id,
-      classification: aiResult.classification,
-      hasDraft: Boolean(aiResult.draft),
+      error: err.message,
     });
+  }
 
+  try {
     const outcome = await handleAiOutcome({
       conversation,
       aiResult,
@@ -514,46 +371,12 @@ async function processInboundMessage(message) {
       action: outcome.action,
     });
   } catch (err) {
-    logger.error('Failed to classify message or handle AI outcome', {
-=======
-  } catch (err) {
-    // The guest response/handover must continue even when dashboard AI metadata fails.
-    logger.error('Failed to persist conversation AI state', {
->>>>>>> Stashed changes
+    logger.error('Failed to handle AI outcome', {
       conversationId: conversation.id,
+      classification: aiResult.classification,
       error: err.message,
     });
   }
-<<<<<<< Updated upstream
-=======
-
-  logger.info('AI decision ready for action', {
-    conversationId: conversation.id,
-    classification: aiResult.classification,
-    hasDraft: Boolean(aiResult.draft),
-  });
-
-  if (aiResult.classification === 'safe_reply') {
-    await sendAndSaveReply(conversation.id, from, aiResult.draft, 'ai');
-    return;
-  }
-
-  if (aiResult.classification === 'clarification_needed') {
-    await sendAndSaveReply(
-      conversation.id,
-      from,
-      aiResult.draft ?? CLARIFICATION_FALLBACK_MESSAGE,
-      'ai'
-    );
-    return;
-  }
-
-  await handOverToHuman(
-    conversation.id,
-    from,
-    'AI classified inbound message for human handover'
-  );
->>>>>>> Stashed changes
 }
 
 module.exports = router;

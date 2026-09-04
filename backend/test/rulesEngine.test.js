@@ -74,7 +74,7 @@ test('rules engine returns reservation-specific check-in and checkout details', 
   assert.match(checkout.reply, /11:00 AM/);
 });
 
-test('rules engine refuses to invent missing or inactive reservation details', async () => {
+test('rules engine hands missing or inactive reservation details to a human', async () => {
   const missing = context({
     apartment: { wifi_details: null },
     policy: { parking_info: null },
@@ -95,9 +95,9 @@ test('rules engine refuses to invent missing or inactive reservation details', a
     inactive.apartment
   );
 
-  assert.equal(wifi.outcome, 'unhandled');
-  assert.equal(parking.outcome, 'unhandled');
-  assert.equal(checkout.outcome, 'unhandled');
+  assert.equal(wifi.outcome, 'human_handover');
+  assert.equal(parking.outcome, 'human_handover');
+  assert.equal(checkout.outcome, 'human_handover');
 });
 
 test('rules engine leaves empty and unknown messages for the classifier', async () => {
