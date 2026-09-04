@@ -4,6 +4,10 @@ const logger = require('../../utils/logger');
 const WHATSAPP_API_VERSION = 'v20.0';
 const BASE_URL = `https://graph.facebook.com/${WHATSAPP_API_VERSION}`;
 
+function getPhoneSuffix(phoneNumber) {
+  return String(phoneNumber ?? '').slice(-4);
+}
+
 // ---------------------------------------------------------------------------
 // getHeaders – builds the Authorization header for every Cloud API request
 // ---------------------------------------------------------------------------
@@ -44,14 +48,17 @@ async function sendTextMessage(to, text) {
     );
 
     logger.info('Text message sent successfully', {
-      to,
+      recipientPhoneSuffix: getPhoneSuffix(to),
       waMessageId: response.data?.messages?.[0]?.id,
     });
 
     return response.data;
   } catch (err) {
-    const errorDetail = err.response?.data ?? err.message;
-    logger.error('Failed to send text message', { to, error: errorDetail });
+    const errorDetail = err.response?.data?.error?.message ?? err.message;
+    logger.error('Failed to send text message', {
+      recipientPhoneSuffix: getPhoneSuffix(to),
+      error: errorDetail,
+    });
     throw err;
   }
 }
@@ -88,16 +95,16 @@ async function sendTemplateMessage(to, templateName, languageCode = 'en_US', com
     );
 
     logger.info('Template message sent successfully', {
-      to,
+      recipientPhoneSuffix: getPhoneSuffix(to),
       templateName,
       waMessageId: response.data?.messages?.[0]?.id,
     });
 
     return response.data;
   } catch (err) {
-    const errorDetail = err.response?.data ?? err.message;
+    const errorDetail = err.response?.data?.error?.message ?? err.message;
     logger.error('Failed to send template message', {
-      to,
+      recipientPhoneSuffix: getPhoneSuffix(to),
       templateName,
       error: errorDetail,
     });
@@ -131,7 +138,7 @@ async function markMessageAsRead(waMessageId) {
     // Non-critical — log and continue
     logger.warn('Failed to mark message as read', {
       waMessageId,
-      error: err.response?.data ?? err.message,
+      error: err.response?.data?.error?.message ?? err.message,
     });
   }
 }

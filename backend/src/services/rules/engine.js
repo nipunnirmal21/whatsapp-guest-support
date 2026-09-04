@@ -15,6 +15,7 @@ const PARKING_KEYWORDS = [
   'park my car',
   'park the car',
   'car park',
+  'where can i park',
   'where to park',
   'garage',
 ];
@@ -46,6 +47,92 @@ const CHECKIN_KEYWORDS = [
   'address',
 ];
 
+const CHECKIN_TIMING_KEYWORDS = [
+  'check in',
+  'check-in',
+  'checkin',
+  'arrival time',
+  'when can i arrive',
+];
+
+const EARLY_CHECKIN_KEYWORDS = [
+  'early check in',
+  'early check-in',
+  'early checkin',
+  'check in early',
+  'check-in early',
+  'checkin early',
+];
+
+const LATE_CHECKOUT_KEYWORDS = [
+  'late check out',
+  'late check-out',
+  'late checkout',
+  'check out late',
+  'check-out late',
+  'checkout late',
+];
+
+const HUMAN_HANDOVER_INTENTS = [
+  {
+    reason: 'refund request',
+    keywords: ['refund', 'money back', 'reimbursement', 'reimburse'],
+  },
+  {
+    reason: 'compensation request',
+    keywords: ['compensation', 'compensate', 'credit for', 'discount because'],
+  },
+  {
+    reason: 'fee or apartment policy request',
+    keywords: [
+      'a fee',
+      'the fee',
+      'any fee',
+      'fees',
+      'a charge',
+      'the charge',
+      'any charge',
+      'charges',
+      'apartment policy',
+      'house rules',
+      'pet policy',
+      'pets allowed',
+      'smoking allowed',
+      'extra guest',
+    ],
+  },
+  {
+    reason: 'maintenance issue',
+    keywords: [
+      'maintenance',
+      'not working',
+      'broken',
+      'needs repair',
+      'need repair',
+      'water leak',
+      'leaking',
+      'no hot water',
+      'power outage',
+      'air conditioner',
+      'air conditioning',
+    ],
+  },
+  {
+    reason: 'guest requested human support',
+    keywords: [
+      'speak to someone',
+      'speak to a person',
+      'speak to a human',
+      'talk to someone',
+      'talk to a person',
+      'talk to a human',
+      'human agent',
+      'support team',
+      'customer service',
+    ],
+  },
+];
+
 const ACTIVE_RESERVATION_STATUSES = ['confirmed', 'checked_in'];
 
 /**
@@ -63,6 +150,62 @@ function normaliseText(text) {
  */
 function matchesAny(text, keywords) {
   return keywords.some((keyword) => text.includes(keyword));
+}
+
+function parseTimeInMinutes(timeValue) {
+  if (!timeValue) return null;
+
+  const match = String(timeValue)
+    .trim()
+    .match(/^(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(am|pm)?$/i);
+
+  if (!match) return null;
+
+  let hours = Number.parseInt(match[1], 10);
+  const minutes = Number.parseInt(match[2] ?? '0', 10);
+  const period = match[3]?.toLowerCase();
+
+  if (minutes > 59 || (period && (hours < 1 || hours > 12)) || (!period && hours > 23)) {
+    return null;
+  }
+
+  if (period === 'am') hours = hours === 12 ? 0 : hours;
+  if (period === 'pm') hours = hours === 12 ? 12 : hours + 12;
+
+  return hours * 60 + minutes;
+}
+
+function extractRequestedTime(text) {
+  const match = text.match(/\b(?:at|by|until|till)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i);
+  return match ? parseTimeInMinutes(match[1]) : null;
+}
+
+function getConditionalTimingHandoverReason(text, policy) {
+  const isCheckin = matchesAny(text, CHECKIN_TIMING_KEYWORDS);
+  const isCheckout = matchesAny(text, CHECKOUT_KEYWORDS);
+
+  if (isCheckin && matchesAny(text, EARLY_CHECKIN_KEYWORDS)) {
+    return 'early check-in request';
+  }
+
+  if (isCheckout && matchesAny(text, LATE_CHECKOUT_KEYWORDS)) {
+    return 'late check-out request';
+  }
+
+  const requestedTime = extractRequestedTime(text);
+  if (requestedTime === null) return null;
+
+  const checkinTime = parseTimeInMinutes(policy?.checkin_time ?? '14:00');
+  if (isCheckin && checkinTime !== null && requestedTime < checkinTime) {
+    return 'early check-in request';
+  }
+
+  const checkoutTime = parseTimeInMinutes(policy?.checkout_time ?? '11:00');
+  if (isCheckout && checkoutTime !== null && requestedTime > checkoutTime) {
+    return 'late check-out request';
+  }
+
+  return null;
 }
 
 /**
@@ -249,7 +392,7 @@ function buildCheckoutReply(reservation, apartment, policy) {
  * @param {string}      text        - guest message text
  * @param {object|null} reservation - matched reservation row
  * @param {object|null} apartment   - apartment row; may include nested `policy`
- * @returns {Promise<{ outcome: 'auto_reply' | 'unhandled', reply: string|null }>}
+ * @returns {Promise<{ outcome: 'auto_reply' | 'human_handover' | 'unhandled', reply: string|null, reason?: string }>}
  */
 async function runRulesEngine(text, reservation, apartment) {
   try {
@@ -262,6 +405,33 @@ async function runRulesEngine(text, reservation, apartment) {
 
     const { apartment: apartmentData, policy } = splitApartmentAndPolicy(apartment);
 
+    const conditionalTimingReason = getConditionalTimingHandoverReason(normalised, policy);
+    if (conditionalTimingReason) {
+      logger.info('Rules engine matched conditional timing request', {
+        reason: conditionalTimingReason,
+      });
+      return {
+        outcome: 'human_handover',
+        reply: null,
+        reason: conditionalTimingReason,
+      };
+    }
+
+    const handoverIntent = HUMAN_HANDOVER_INTENTS.find(({ keywords }) =>
+      matchesAny(normalised, keywords)
+    );
+
+    if (handoverIntent) {
+      logger.info('Rules engine matched human handover intent', {
+        reason: handoverIntent.reason,
+      });
+      return {
+        outcome: 'human_handover',
+        reply: null,
+        reason: handoverIntent.reason,
+      };
+    }
+
     if (matchesAny(normalised, WIFI_KEYWORDS)) {
       const reply = buildWifiReply(apartmentData, policy);
 
@@ -273,7 +443,11 @@ async function runRulesEngine(text, reservation, apartment) {
       }
 
       logger.info('Rules engine wifi intent missing structured data');
-      return { outcome: 'unhandled', reply: null };
+      return {
+        outcome: 'human_handover',
+        reply: null,
+        reason: 'Wi-Fi request missing structured data',
+      };
     }
 
     if (matchesAny(normalised, PARKING_KEYWORDS)) {
@@ -287,7 +461,11 @@ async function runRulesEngine(text, reservation, apartment) {
       }
 
       logger.info('Rules engine parking intent missing structured data');
-      return { outcome: 'unhandled', reply: null };
+      return {
+        outcome: 'human_handover',
+        reply: null,
+        reason: 'parking request missing structured data',
+      };
     }
 
     if (matchesAny(normalised, CHECKOUT_KEYWORDS)) {
@@ -301,7 +479,11 @@ async function runRulesEngine(text, reservation, apartment) {
       }
 
       logger.info('Rules engine check-out intent could not be answered deterministically');
-      return { outcome: 'unhandled', reply: null };
+      return {
+        outcome: 'human_handover',
+        reply: null,
+        reason: 'check-out request missing structured data',
+      };
     }
 
     if (matchesAny(normalised, CHECKIN_KEYWORDS)) {
@@ -315,7 +497,11 @@ async function runRulesEngine(text, reservation, apartment) {
       }
 
       logger.info('Rules engine check-in intent could not be answered deterministically');
-      return { outcome: 'unhandled', reply: null };
+      return {
+        outcome: 'human_handover',
+        reply: null,
+        reason: 'check-in request missing structured data',
+      };
     }
 
     logger.info('Rules engine found no matching intent');
@@ -325,7 +511,11 @@ async function runRulesEngine(text, reservation, apartment) {
       error: err.message,
       stack: err.stack,
     });
-    return { outcome: 'unhandled', reply: null };
+    return {
+      outcome: 'human_handover',
+      reply: null,
+      reason: 'rules engine failure',
+    };
   }
 }
 
