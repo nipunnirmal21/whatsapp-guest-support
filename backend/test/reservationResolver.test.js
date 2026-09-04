@@ -77,6 +77,23 @@ test('unique Booking ID fallback becomes a verified reservation context', async 
   assert.equal(result.reservationContext, bookingContext);
 });
 
+test('unknown Booking ID remains unmatched without exposing reservation context', async () => {
+  const resolver = createResolver();
+
+  const result = await resolver.resolveReservationContext({
+    phoneNumber: '94770000000',
+    messageText: 'My booking ID is missing-9999',
+  });
+
+  assert.equal(result.reservationContext, null);
+  assert.equal(result.candidateReservationId, null);
+  assert.deepEqual(result.match, {
+    status: 'unmatched',
+    method: 'booking_id',
+    reason: 'booking_id_not_found',
+  });
+});
+
 test('Booking ID plus a different supplied guest name is rejected', async () => {
   const resolver = createResolver({
     async findByBookingId() {
@@ -112,6 +129,7 @@ test('unique guest-name fallback is provisional and exposes no reservation conte
   assert.equal(result.candidateReservationId, 'name');
   assert.equal(result.match.status, 'provisional');
   assert.equal(result.match.method, 'guest_name');
+  assert.equal(result.match.reason, 'booking_id_verification_required');
 });
 
 test('multiple guest-name matches are marked ambiguous', async () => {
@@ -126,6 +144,7 @@ test('multiple guest-name matches are marked ambiguous', async () => {
     messageText: 'Guest name: Nimal Perera',
   });
 
+  assert.equal(result.reservationContext, null);
   assert.equal(result.candidateReservationId, null);
   assert.equal(result.match.status, 'ambiguous');
   assert.equal(result.match.reason, 'multiple_active_reservations');

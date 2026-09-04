@@ -551,6 +551,7 @@ function InboxView({
   onResumeAutomation,
   escalateBusy,
   actionBusyId,
+  operatorConfigured,
 }) {
   const selected = conversations.find((c) => c.id === selectedId) ?? null;
   const currentAdmin = adminUsers.find((user) => user.id === ADMIN_USER_ID);
@@ -651,7 +652,7 @@ function InboxView({
             {selected.rawStatus === 'manual' ? (
               <button
                 type="button"
-                disabled={actionBusyId === selected.id}
+                disabled={!operatorConfigured || actionBusyId === selected.id}
                 onClick={() => onResumeAutomation(selected)}
                 className="rounded-lg border border-white/20 bg-[#132B4F] px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-white transition hover:border-[#C9A227] hover:text-[#C9A227] disabled:opacity-50"
               >
@@ -660,7 +661,7 @@ function InboxView({
             ) : selected.rawStatus !== 'resolved' ? (
               <button
                 type="button"
-                disabled={actionBusyId === selected.id}
+                disabled={!operatorConfigured || actionBusyId === selected.id}
                 onClick={() => onStartManualMode(selected)}
                 className="rounded-lg border border-white/20 bg-[#132B4F] px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-white transition hover:border-[#C9A227] hover:text-[#C9A227] disabled:opacity-50"
               >
@@ -722,6 +723,7 @@ function InboxView({
             <textarea
               rows={2}
               value={replyText}
+              disabled={!operatorConfigured}
               onChange={(e) => setReplyText(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -729,13 +731,14 @@ function InboxView({
                   handleSendMessage();
                 }
               }}
-              placeholder="Type your reply to the guest..."
-              className="flex-1 resize-none rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-4 py-3 text-sm text-white placeholder-white/30 outline-none transition focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]"
+              placeholder={operatorConfigured ? 'Type your reply to the guest...' : 'Configure VITE_ADMIN_USER_ID to reply'}
+              className="flex-1 resize-none rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-4 py-3 text-sm text-white placeholder-white/30 outline-none transition focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227] disabled:cursor-not-allowed disabled:opacity-50"
             />
             <button
               type="button"
+              disabled={!operatorConfigured}
               onClick={handleSendMessage}
-              className="shrink-0 rounded-xl bg-[#C9A227] px-5 py-3 text-sm font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37]"
+              className="shrink-0 rounded-xl bg-[#C9A227] px-5 py-3 text-sm font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37] disabled:cursor-not-allowed disabled:opacity-50"
             >
               Send
             </button>
@@ -796,7 +799,7 @@ function InboxView({
             {selected.rawStatus === 'manual' ? (
               <button
                 type="button"
-                disabled={actionBusyId === selected.id}
+                disabled={!operatorConfigured || actionBusyId === selected.id}
                 onClick={() => onResumeAutomation(selected)}
                 className="w-full rounded-xl border border-white/20 bg-[#132B4F] px-4 py-3 text-left text-sm font-medium text-white transition hover:border-[#C9A227] hover:text-[#C9A227] disabled:opacity-40"
               >
@@ -805,7 +808,7 @@ function InboxView({
             ) : selected.rawStatus !== 'resolved' ? (
               <button
                 type="button"
-                disabled={actionBusyId === selected.id}
+                disabled={!operatorConfigured || actionBusyId === selected.id}
                 onClick={() => onStartManualMode(selected)}
                 className="w-full rounded-xl border border-white/20 bg-[#132B4F] px-4 py-3 text-left text-sm font-medium text-white transition hover:border-[#C9A227] hover:text-[#C9A227] disabled:opacity-40"
               >
@@ -958,7 +961,16 @@ function ReservationsView({ conversations }) {
   );
 }
 
-function EscalationsView({ tickets, loading, error, onTakeOver, onResolve, onViewConversation, actionBusyId }) {
+function EscalationsView({
+  tickets,
+  loading,
+  error,
+  onTakeOver,
+  onResolve,
+  onViewConversation,
+  actionBusyId,
+  operatorConfigured,
+}) {
   const pendingCount = tickets.filter((t) => t.status === 'Pending').length;
 
   return (
@@ -1022,7 +1034,7 @@ function EscalationsView({ tickets, loading, error, onTakeOver, onResolve, onVie
                   {ticket.status === 'Pending' ? (
                     <button
                       type="button"
-                      disabled={actionBusyId === ticket.id}
+                      disabled={!operatorConfigured || actionBusyId === ticket.id}
                       onClick={() => onTakeOver(ticket)}
                       className="rounded-xl border border-[#C9A227] bg-[#C9A227] px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-[#0B1F3A] shadow-lg shadow-[#C9A227]/20 transition hover:bg-[#D4AF37] disabled:opacity-50"
                     >
@@ -1035,7 +1047,11 @@ function EscalationsView({ tickets, loading, error, onTakeOver, onResolve, onVie
                   )}
                   <button
                     type="button"
-                    disabled={actionBusyId === ticket.id || ticket.status === 'Resolved'}
+                    disabled={
+                      !operatorConfigured ||
+                      actionBusyId === ticket.id ||
+                      ticket.status === 'Resolved'
+                    }
                     onClick={() => onResolve(ticket)}
                     className="rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-5 py-2.5 text-xs font-medium text-white/70 transition hover:border-[#C9A227]/30 hover:text-white disabled:opacity-40"
                   >
@@ -1903,7 +1919,10 @@ export default function App() {
 
             <button
               type="button"
-              className="relative rounded-xl border border-[#1E3A5F] bg-[#132B4F] p-2.5 text-white/70 transition hover:border-[#C9A227]/50 hover:text-[#C9A227]"
+              disabled
+              aria-label="Notifications are not available in this MVP"
+              title="Notifications are not available in this MVP"
+              className="relative cursor-not-allowed rounded-xl border border-[#1E3A5F] bg-[#132B4F] p-2.5 text-white/40 opacity-60"
             >
               <IconBell />
               {pendingEscalations > 0 && (
@@ -1951,6 +1970,7 @@ export default function App() {
               onResumeAutomation={handleResumeAutomation}
               escalateBusy={escalateBusy}
               actionBusyId={actionBusyId}
+              operatorConfigured={Boolean(currentAdminUser)}
             />
           )}
 
@@ -1967,6 +1987,7 @@ export default function App() {
               onResolve={handleResolve}
               onViewConversation={handleViewConversation}
               actionBusyId={actionBusyId}
+              operatorConfigured={Boolean(currentAdminUser)}
             />
           )}
 
