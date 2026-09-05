@@ -93,7 +93,7 @@ router.post('/:id/take-over', requireOperator, async (req, res, next) => {
 
     const result = await takeOverEscalation({
       escalationId: id,
-      operatorId: req.adminUserId,
+      operatorId: req.operator.id,
     });
 
     return res.status(200).json({ success: true, data: result });
@@ -174,7 +174,7 @@ router.post('/resolve', requireOperator, async (req, res, next) => {
 
     const conversation = await resolveConversation({
       conversationId,
-      operatorId: req.adminUserId,
+      operatorId: req.operator.id,
     });
 
     return res.status(200).json({ success: true, data: conversation });

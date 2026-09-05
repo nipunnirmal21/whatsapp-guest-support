@@ -23,7 +23,7 @@ Never expose the service-role key or direct database URI to the frontend.
 | `owners` | Optional apartment-owner data |
 | `guests` | Guest identity and phone number |
 | `reservations` | Booking reference, dates, status, guest, apartment |
-| `admin_users` | Dashboard operators, supervisors, and admins |
+| `admin_users` | Dashboard operators, supervisors, and admins, linked to Supabase Auth by `auth_user_id` |
 | `conversations` | WhatsApp thread, reservation link, assignment, AI state |
 | `messages` | Inbound/outbound content and current delivery state |
 | `message_delivery_events` | Durable provider status-event history |
@@ -46,6 +46,7 @@ Migrations run in numeric filename order.
 | `006_reservation_fallback.sql` | Booking/name lookup keys and atomic conversation linking |
 | `007_whatsapp_delivery_statuses.sql` | Durable delivery events and ordered status reconciliation |
 | `008_transaction_safe_escalations.sql` | Open-escalation uniqueness, lifecycle constraints, create/resolve hardening |
+| `009_supabase_dashboard_auth.sql` | Supabase Auth UUID binding for dashboard operators |
 
 ## Applying migrations
 
@@ -70,6 +71,15 @@ Before a production migration:
 7. Keep a rollback/recovery plan for application and data changes.
 
 Do not use `npm run migrate` casually against an unknown connection string.
+
+## Dashboard operator authentication
+
+Migration 009 adds `admin_users.auth_user_id`, backfills it where an existing
+dashboard email matches a Supabase Auth email case-insensitively, and enforces a
+unique foreign-key relationship to `auth.users.id`. Create staff accounts through
+the Supabase Auth administration interface; the dashboard intentionally has no
+public sign-up flow. Any account that is not linked to an allowed `admin_users`
+role is denied dashboard API access.
 
 ## Reservation matching data
 

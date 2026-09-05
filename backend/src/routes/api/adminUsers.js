@@ -12,7 +12,7 @@ router.get('/', async (_req, res, next) => {
   try {
     const { data, error } = await supabase
       .from('admin_users')
-      .select('id, name, email, role')
+      .select('id, auth_user_id, name, email, role')
       .order('name', { ascending: true });
 
     if (error) {

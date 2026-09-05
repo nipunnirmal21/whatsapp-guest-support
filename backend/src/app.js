@@ -166,7 +166,7 @@ app.post(
 );
 
 // ---------------------------------------------------------------------------
-// API routes (dashboard) — require API key; webhooks stay unauthenticated
+// API routes (dashboard) — require a Supabase session; webhooks stay unauthenticated
 // ---------------------------------------------------------------------------
 app.use('/api', requireDashboardAuth);
 app.use('/api/messages',      messagesRouter);

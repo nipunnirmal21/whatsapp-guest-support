@@ -18,22 +18,23 @@ function createResponse() {
   };
 }
 
-test('operator middleware rejects a missing identity', () => {
-  const req = { headers: {}, originalUrl: '/api/escalations/e/take-over', method: 'POST' };
+test('operator middleware rejects missing server-derived identity despite spoofed header', () => {
+  const req = {
+    headers: { 'x-admin-user-id': '11111111-1111-4111-8111-111111111111' },
+    originalUrl: '/api/escalations/e/take-over',
+    method: 'POST',
+  };
   const res = createResponse();
-  let called = false;
 
-  requireOperator(req, res, () => {
-    called = true;
-  });
+  requireOperator(req, res, () => assert.fail('next should not be called'));
 
-  assert.equal(called, false);
   assert.equal(res.statusCode, 401);
 });
 
-test('operator middleware rejects a malformed UUID', () => {
+test('operator middleware rejects a server-derived unauthorized role', () => {
   const req = {
-    headers: { 'x-admin-user-id': 'not-a-uuid' },
+    headers: {},
+    operator: { id: 'operator-1', role: 'viewer' },
     originalUrl: '/api/conversations/c/manual-mode',
     method: 'POST',
   };
@@ -41,13 +42,13 @@ test('operator middleware rejects a malformed UUID', () => {
 
   requireOperator(req, res, () => assert.fail('next should not be called'));
 
-  assert.equal(res.statusCode, 400);
+  assert.equal(res.statusCode, 403);
 });
 
-test('operator middleware attaches a valid admin user id', () => {
-  const operatorId = '11111111-1111-4111-8111-111111111111';
+test('operator middleware accepts identity resolved by dashboard authentication', () => {
   const req = {
-    headers: { 'x-admin-user-id': operatorId },
+    headers: {},
+    operator: { id: 'operator-1', role: 'operator' },
     originalUrl: '/api/conversations/c/manual-mode',
     method: 'POST',
   };
@@ -59,7 +60,6 @@ test('operator middleware attaches a valid admin user id', () => {
   });
 
   assert.equal(called, true);
-  assert.equal(req.adminUserId, operatorId);
   assert.equal(res.statusCode, null);
+  assert.equal(req.adminUserId, undefined);
 });
-

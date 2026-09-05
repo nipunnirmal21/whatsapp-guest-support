@@ -77,7 +77,7 @@ npm.cmd run dev
 
 On macOS/Linux, use `cp .env.example .env` and `npm` instead of `npm.cmd`.
 
-Complete the values in `backend/.env` before starting. The server validates the critical WhatsApp, Supabase, webhook, and dashboard variables at startup. `LLM_API_KEY` is required for real AI classification; without it the classifier fails safely to human handover.
+Complete the values in `backend/.env` before starting. The server validates the critical WhatsApp, Supabase, and webhook variables at startup. `LLM_API_KEY` is required for real AI classification; without it the classifier fails safely to human handover.
 
 Do not run migrations against production without a current backup and a reviewed deployment plan. See [Database and Migrations](docs/DATABASE_AND_MIGRATIONS.md).
 
@@ -90,29 +90,17 @@ npm.cmd ci
 npm.cmd run dev
 ```
 
-The dashboard defaults to `http://localhost:3000` for its backend. Set an existing `admin_users.id` as `VITE_ADMIN_USER_ID` to use Take Over, assignment, manual mode, human reply, resume, and resolve actions.
+The dashboard defaults to `http://localhost:3000` for its backend. Configure the public Supabase URL and anon key, then sign in with a manually provisioned Supabase Auth user linked to `admin_users.auth_user_id`.
 
 ## Authentication
 
-All `/api/*` routes require one of:
+All `/api/*` routes require a Supabase Auth access token:
 
 ```http
-X-API-Key: <DASHBOARD_API_KEY>
+Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
 ```
 
-or:
-
-```http
-Authorization: Bearer <DASHBOARD_API_KEY>
-```
-
-Operator mutations additionally require:
-
-```http
-X-Admin-User-Id: <admin_users UUID>
-```
-
-The shared dashboard API key is a development-stage authentication mechanism. Because `VITE_*` values are included in the browser bundle, use a proper user login/session layer before exposing the dashboard to untrusted users.
+The backend validates the token with Supabase Auth and resolves the operator through `admin_users.auth_user_id`. Browser-supplied operator IDs are not trusted. Webhook and health endpoints remain public.
 
 ## Key endpoints
 

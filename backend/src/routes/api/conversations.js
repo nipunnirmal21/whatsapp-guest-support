@@ -185,7 +185,7 @@ router.patch('/:id/assignment', requireOperator, async (req, res, next) => {
 
     const conversation = await assignConversation({
       conversationId: id,
-      actorId: req.adminUserId,
+      actorId: req.operator.id,
       assignedTo,
     });
 
@@ -219,7 +219,7 @@ router.post('/:id/manual-mode', requireOperator, async (req, res, next) => {
 
     const conversation = await startManualMode({
       conversationId: id,
-      operatorId: req.adminUserId,
+      operatorId: req.operator.id,
       reason,
     });
 
@@ -243,7 +243,7 @@ router.post('/:id/resume-automation', requireOperator, async (req, res, next) =>
 
     const conversation = await resumeAutomation({
       conversationId: id,
-      operatorId: req.adminUserId,
+      operatorId: req.operator.id,
     });
 
     return res.status(200).json({ success: true, data: conversation });
@@ -294,7 +294,7 @@ router.post('/:id/reply', requireOperator, async (req, res, next) => {
 
     await startManualMode({
       conversationId: conversation.id,
-      operatorId: req.adminUserId,
+      operatorId: req.operator.id,
       reason: 'Operator sent a dashboard reply',
     });
 

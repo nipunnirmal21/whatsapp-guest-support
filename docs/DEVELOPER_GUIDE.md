@@ -23,10 +23,10 @@ backend/
 |   |-- db/
 |   |   |-- client.js                 # Service-role Supabase client
 |   |   |-- rawEvents.js              # Raw webhook audit persistence
-|   |   `-- migrations/               # 001..008 SQL migrations
+|   |   `-- migrations/               # Ordered SQL migrations
 |   |-- middleware/
-|   |   |-- auth.js                   # Dashboard API-key authentication
-|   |   |-- requireOperator.js        # X-Admin-User-Id validation
+|   |   |-- auth.js                   # Supabase session + operator authorization
+|   |   |-- requireOperator.js        # Server-resolved operator guard
 |   |   `-- validateWebhookSignature.js
 |   |-- routes/
 |   |   |-- api/                      # Dashboard/internal endpoints

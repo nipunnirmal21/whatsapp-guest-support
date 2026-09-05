@@ -1,41 +1,35 @@
 const logger = require('../utils/logger');
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const { ALLOWED_DASHBOARD_ROLES } = require('./auth');
 
 /**
- * Temporary dashboard operator identity layer.
- *
- * The shared dashboard API key authenticates the application. Mutating
- * handover endpoints additionally require X-Admin-User-Id so actions can be
- * assigned and audited against an admin_users row. The database functions
- * validate that the supplied user exists and enforce role permissions.
+ * Confirms that the global dashboard-auth middleware resolved an authorized
+ * operator. Identity is server-derived from the validated Supabase session;
+ * browser-supplied operator headers are intentionally ignored.
  */
 function requireOperator(req, res, next) {
-  const value = req.headers['x-admin-user-id'];
-  const operatorId = typeof value === 'string' ? value.trim() : '';
+  const role = typeof req.operator?.role === 'string'
+    ? req.operator.role.trim().toLowerCase()
+    : '';
 
-  if (!operatorId) {
-    logger.warn('Handover request missing operator identity', {
+  if (!req.operator?.id) {
+    logger.warn('Operator action reached route without authenticated identity', {
       path: req.originalUrl,
       method: req.method,
     });
     return res.status(401).json({
       success: false,
-      error: 'Unauthorized - missing X-Admin-User-Id header',
+      error: 'Unauthorized — operator login is required',
     });
   }
 
-  if (!UUID_RE.test(operatorId)) {
-    return res.status(400).json({
+  if (!ALLOWED_DASHBOARD_ROLES.has(role)) {
+    return res.status(403).json({
       success: false,
-      error: 'Invalid X-Admin-User-Id header',
+      error: 'Forbidden — operator role is not authorized',
     });
   }
 
-  req.adminUserId = operatorId;
   return next();
 }
 
 module.exports = requireOperator;
-

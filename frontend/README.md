@@ -17,8 +17,8 @@ The development server prints its local URL, normally `http://localhost:5173`.
 | Variable | Required | Purpose |
 |---|---:|---|
 | `VITE_API_BASE_URL` | Yes | Backend base URL, for example `http://localhost:3000` |
-| `VITE_DASHBOARD_API_KEY` | Yes | Value sent as `X-API-Key` to dashboard APIs |
-| `VITE_ADMIN_USER_ID` | For operator actions | Existing `admin_users.id` sent as `X-Admin-User-Id` |
+| `VITE_SUPABASE_URL` | Yes | Public URL for the same Supabase project used by the backend |
+| `VITE_SUPABASE_ANON_KEY` | Yes | Public anon key used by Supabase Auth in the browser |
 
 Restart the Vite development server after changing environment variables.
 
@@ -42,8 +42,10 @@ npm.cmd run build
 npm.cmd run preview
 ```
 
-## Authentication warning
+## Authentication
 
-Vite exposes `VITE_*` values to browser JavaScript. The current shared API key and configured admin UUID are suitable for controlled development environments, not public authentication. Add a real user login/session system and backend authorization before exposing the dashboard to untrusted users.
+The dashboard restores a Supabase Auth session, shows email/password login when unauthenticated, and sends the short-lived access token as a Bearer credential. There is no public registration UI. Staff users must be provisioned in Supabase Auth and linked to `admin_users.auth_user_id` by an administrator.
+
+The Supabase URL and anon key are public client configuration. Never place the service-role key or any backend/provider secret in a `VITE_*` variable.
 
 For backend setup and API details, see the repository [README](../README.md) and [API Reference](../docs/API.md).

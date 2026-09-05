@@ -4,23 +4,13 @@ Default local base URL: `http://localhost:3000`.
 
 ## Authentication
 
-Every `/api/*` endpoint requires either:
+Every `/api/*` endpoint requires a Supabase Auth access token:
 
 ```http
-X-API-Key: <DASHBOARD_API_KEY>
+Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
 ```
 
-or:
-
-```http
-Authorization: Bearer <DASHBOARD_API_KEY>
-```
-
-The following operator actions also require an existing `admin_users.id`:
-
-```http
-X-Admin-User-Id: <UUID>
-```
+The authenticated Supabase user must be linked through `admin_users.auth_user_id` and have the `operator`, `supervisor`, or `admin` role. Operator identity and audit attribution are resolved by the backend, never from a browser-supplied ID.
 
 - Take Over escalation
 - Assign conversation
@@ -286,7 +276,7 @@ The server-side emergency switch always overrides effective settings.
 
 ### `GET /api/admin-users`
 
-Returns `id`, `name`, `email`, and `role` for dashboard assignment controls.
+Returns `id`, `auth_user_id`, `name`, `email`, and `role` for authenticated dashboard assignment controls.
 
 ## Rate limits
 
@@ -303,8 +293,8 @@ Limits are applied in addition to authentication.
 | Status | Meaning |
 |---:|---|
 | `400` | Invalid body, UUID, phone number, setting, or identifier combination |
-| `401` | Missing/invalid API key or missing operator identity |
-| `403` | Invalid Meta signature or insufficient operator role/ownership |
+| `401` | Missing, invalid, or expired Supabase Auth session |
+| `403` | Authenticated user is not linked to an allowed operator, invalid Meta signature, or insufficient operator role/ownership |
 | `404` | Conversation, escalation, operator, or assignee not found |
 | `409` | Invalid state transition or assignment conflict |
 | `429` | Rate limit reached |

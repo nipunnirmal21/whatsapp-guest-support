@@ -24,7 +24,6 @@ The server refuses to start when any of these are missing:
 - `META_APP_SECRET`
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `DASHBOARD_API_KEY`
 
 `LLM_API_KEY` is not a startup requirement, but real AI classification requires it. Missing/invalid AI configuration produces a safe human-handover result.
 
@@ -96,13 +95,7 @@ Rules-engine replies are a separate deterministic path. If all automated respons
 
 ## Dashboard access
 
-The current dashboard sends a shared API key and configured admin UUID from browser environment variables. These values are visible to users who can load the frontend bundle. Before internet-wide exposure:
-
-- Add real user authentication/session handling.
-- Resolve operator identity server-side.
-- Enforce per-user authorization.
-- Restrict dashboard network access during the transition.
-- Rotate any development credentials used in shared environments.
+The dashboard uses Supabase Auth email/password sessions. Provision staff accounts manually, apply migration 009, and link each allowed `admin_users` row to its Supabase Auth UUID. The backend validates every `/api/*` Bearer token and resolves operator identity server-side. Keep the service-role key backend-only; the frontend receives only the public Supabase URL and anon key.
 
 ## CORS and hosting
 

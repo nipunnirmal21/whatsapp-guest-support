@@ -14,47 +14,8 @@ import {
   getDeliveryStatusPresentation,
   normaliseDeliveryStatus,
 } from './services/messageDelivery.js';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
-const DASHBOARD_API_KEY = import.meta.env.VITE_DASHBOARD_API_KEY || '';
-const ADMIN_USER_ID = import.meta.env.VITE_ADMIN_USER_ID || '';
-
-/**
- * Central authenticated fetch for all dashboard API calls.
- * Always sends X-API-Key from VITE_DASHBOARD_API_KEY.
- */
-async function fetchWithAuth(path, options = {}) {
-  const headers = new Headers(options.headers || {});
-
-  if (DASHBOARD_API_KEY) {
-    headers.set('X-API-Key', DASHBOARD_API_KEY);
-  }
-
-  if (ADMIN_USER_ID) {
-    headers.set('X-Admin-User-Id', ADMIN_USER_ID);
-  }
-
-  if (options.body && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
-  }
-
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
-
-  const json = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    const message = json.error || json.message || `Request failed (${res.status})`;
-    const err = new Error(message);
-    err.status = res.status;
-    err.payload = json;
-    throw err;
-  }
-
-  return json;
-}
+import { fetchWithAuth, setUnauthorizedHandler } from './services/api.js';
+import { supabase, supabaseConfigError } from './lib/supabase.js';
 
 const NAV_ITEMS = [
   { id: 'inbox', label: 'Inbox', badge: null },
@@ -546,6 +507,7 @@ function InboxView({
   messagesLoading,
   onEscalate,
   adminUsers,
+  currentOperator,
   onAssignConversation,
   onStartManualMode,
   onResumeAutomation,
@@ -554,10 +516,9 @@ function InboxView({
   operatorConfigured,
 }) {
   const selected = conversations.find((c) => c.id === selectedId) ?? null;
-  const currentAdmin = adminUsers.find((user) => user.id === ADMIN_USER_ID);
-  const assignableUsers = ['supervisor', 'admin'].includes(currentAdmin?.role)
+  const assignableUsers = ['supervisor', 'admin'].includes(currentOperator?.role)
     ? adminUsers
-    : adminUsers.filter((user) => user.id === ADMIN_USER_ID);
+    : adminUsers.filter((user) => user.id === currentOperator?.id);
 
   if (!selected) {
     return (
@@ -731,7 +692,7 @@ function InboxView({
                   handleSendMessage();
                 }
               }}
-              placeholder={operatorConfigured ? 'Type your reply to the guest...' : 'Configure VITE_ADMIN_USER_ID to reply'}
+              placeholder={operatorConfigured ? 'Type your reply to the guest...' : 'Sign in as a linked operator to reply'}
               className="flex-1 resize-none rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-4 py-3 text-sm text-white placeholder-white/30 outline-none transition focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227] disabled:cursor-not-allowed disabled:opacity-50"
             />
             <button
@@ -858,7 +819,7 @@ function InboxView({
             </select>
             {assignableUsers.length === 0 && (
               <p className="mt-2 text-[10px] text-[#C9A227]">
-                Configure VITE_ADMIN_USER_ID to enable assignment.
+                Your authenticated account is not linked to an assignable operator.
               </p>
             )}
           </div>
@@ -1236,7 +1197,7 @@ function SettingsView({
   );
 }
 
-export default function App() {
+function Dashboard({ session, onLogout }) {
   const [activeNav, setActiveNav] = useState('inbox');
   const [conversations, setConversations] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -1492,7 +1453,8 @@ export default function App() {
   const activeStays = conversations.filter(
     (c) => c.status === 'Checked In' || c.status === 'Confirmed'
   ).length;
-  const currentAdminUser = adminUsers.find((user) => user.id === ADMIN_USER_ID) ?? null;
+  const currentAdminUser =
+    adminUsers.find((user) => user.auth_user_id === session.user.id) ?? null;
   const currentAdminName = currentAdminUser?.name ?? 'Operator not configured';
   const currentAdminInitials = currentAdminUser?.name
     ? currentAdminUser.name
@@ -1559,7 +1521,7 @@ export default function App() {
                   status: 'Manual',
                   rawStatus: 'manual',
                   priority: 'escalated',
-                  assignedTo: ADMIN_USER_ID || convo.assignedTo,
+                  assignedTo: currentAdminUser?.id ?? convo.assignedTo,
                   assigneeName: currentAdminUser?.name ?? convo.assigneeName,
                 }
               : convo
@@ -1632,7 +1594,7 @@ export default function App() {
                 ...t,
                 status: 'Acknowledged',
                 rawStatus: 'acknowledged',
-                assignedTo: result.escalation?.escalated_to ?? ADMIN_USER_ID,
+                assignedTo: result.escalation?.escalated_to ?? currentAdminUser?.id,
                 assigneeName,
               }
             : t
@@ -1939,10 +1901,17 @@ export default function App() {
               <div className="hidden sm:block">
                 <p className="text-sm font-medium text-white">{currentAdminName}</p>
                 <p className="text-[10px] capitalize text-[#C9A227]">
-                  {currentAdminUser?.role ?? 'Set VITE_ADMIN_USER_ID'}
+                  {currentAdminUser?.role ?? 'Authenticated staff'}
                 </p>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={onLogout}
+              className="rounded-xl border border-white/20 bg-[#132B4F] px-3 py-2 text-xs font-bold uppercase tracking-wide text-white/70 transition hover:border-[#C9A227] hover:text-[#C9A227]"
+            >
+              Log out
+            </button>
           </div>
         </header>
 
@@ -1965,6 +1934,7 @@ export default function App() {
               messagesLoading={messagesLoading}
               onEscalate={handleEscalate}
               adminUsers={adminUsers}
+              currentOperator={currentAdminUser}
               onAssignConversation={handleAssignConversation}
               onStartManualMode={handleStartManualMode}
               onResumeAutomation={handleResumeAutomation}
@@ -2015,4 +1985,142 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+function LoginScreen({ message, onLogin }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [loginError, setLoginError] = useState(null);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (submitting) return;
+
+    setSubmitting(true);
+    setLoginError(null);
+    try {
+      await onLogin(email.trim(), password);
+    } catch (error) {
+      setLoginError(error.message || 'Sign-in failed. Check your credentials.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-black px-6 text-white">
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-md rounded-2xl border border-[#1E3A5F] bg-[#0B1F3A] p-8 shadow-2xl"
+      >
+        <p className="text-xs font-bold uppercase tracking-[0.3em] text-[#C9A227]">
+          Serendib Vacation
+        </p>
+        <h1 className="mt-3 text-2xl font-bold">Staff dashboard login</h1>
+        <p className="mt-2 text-sm text-white/50">
+          Sign in with your provisioned Supabase staff account.
+        </p>
+
+        {(message || loginError) && (
+          <div className="mt-6 rounded-xl border border-[#C9A227]/40 bg-black px-4 py-3 text-sm text-[#C9A227]">
+            {loginError || message}
+          </div>
+        )}
+
+        <label className="mt-6 block text-xs font-bold uppercase tracking-wide text-white/60">
+          Email
+          <input
+            type="email"
+            autoComplete="username"
+            required
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            className="mt-2 w-full rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-4 py-3 text-sm font-normal normal-case tracking-normal text-white outline-none focus:border-[#C9A227]"
+          />
+        </label>
+
+        <label className="mt-4 block text-xs font-bold uppercase tracking-wide text-white/60">
+          Password
+          <input
+            type="password"
+            autoComplete="current-password"
+            required
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            className="mt-2 w-full rounded-xl border border-[#1E3A5F] bg-[#132B4F] px-4 py-3 text-sm font-normal normal-case tracking-normal text-white outline-none focus:border-[#C9A227]"
+          />
+        </label>
+
+        <button
+          type="submit"
+          disabled={submitting || Boolean(supabaseConfigError)}
+          className="mt-6 w-full rounded-xl bg-[#C9A227] px-5 py-3 text-sm font-bold uppercase tracking-wide text-[#0B1F3A] transition hover:bg-[#D4AF37] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {submitting ? 'Signing in...' : 'Sign in'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+export default function App() {
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(Boolean(supabase));
+  const [authMessage, setAuthMessage] = useState(supabaseConfigError);
+
+  useEffect(() => {
+    if (!supabase) {
+      return undefined;
+    }
+
+    let active = true;
+    setUnauthorizedHandler((message) => {
+      if (!active) return;
+      setAuthMessage(message);
+      setSession(null);
+    });
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!active) return;
+      setSession(data?.session ?? null);
+      if (error) setAuthMessage('Your saved session could not be restored. Please sign in again.');
+      setAuthLoading(false);
+    });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!active) return;
+      setSession(nextSession);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      active = false;
+      setUnauthorizedHandler(null);
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleLogin(email, password) {
+    if (!supabase) throw new Error(supabaseConfigError);
+    setAuthMessage(null);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw new Error(error.message || 'Sign-in failed');
+  }
+
+  async function handleLogout() {
+    if (!supabase) return;
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
+    if (error) {
+      setAuthMessage(error.message || 'Logout failed');
+      return;
+    }
+    setSession(null);
+    setAuthMessage(null);
+  }
+
+  if (authLoading) return <LoadingScreen />;
+  if (!session) return <LoginScreen message={authMessage} onLogin={handleLogin} />;
+
+  return <Dashboard session={session} onLogout={handleLogout} />;
 }
