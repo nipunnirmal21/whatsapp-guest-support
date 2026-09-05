@@ -311,6 +311,18 @@ async function processInboundMessage(message) {
         aiResult: { classification: 'human_handover', draft: null },
         reservationContext: aiContext,
         inboundMessageId: savedMessage.id,
+        handoverReason: rulesResult.reason,
+        maintenanceIssue:
+          rulesResult.reason === 'maintenance issue'
+            ? {
+                description: textContent,
+                apartmentId:
+                  reservationContext?.reservation?.id &&
+                  reservationContext?.apartment?.id
+                    ? reservationContext.apartment.id
+                    : null,
+              }
+            : null,
       });
 
       logger.info('Rules engine human handover completed', {

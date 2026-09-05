@@ -21,9 +21,11 @@ function createHarness({
   autoSendClarifications = true,
   escalationCreated = true,
   dispatchError = null,
+  maintenanceError = null,
 } = {}) {
   const dispatched = [];
   const escalations = [];
+  const maintenanceCases = [];
   const states = [];
   const logger = { info() {}, warn() {}, error() {} };
 
@@ -51,12 +53,27 @@ function createHarness({
         created: escalationCreated,
       };
     },
+    async ensureMaintenanceCase(payload) {
+      maintenanceCases.push(payload);
+      if (maintenanceError) throw maintenanceError;
+      return {
+        maintenanceCase: {
+          id: 'maintenance-1',
+          conversation_id: payload.conversationId,
+          apartment_id: payload.apartmentId,
+          description: payload.description,
+          status: 'open',
+        },
+        created: true,
+        skipped: false,
+      };
+    },
     async updateAiActionState(payload) {
       states.push(payload);
     },
   });
 
-  return { handler, dispatched, escalations, states };
+  return { handler, dispatched, escalations, maintenanceCases, states };
 }
 
 test('safe_reply waits for operator approval when auto reply is disabled', async () => {
@@ -139,6 +156,59 @@ test('human_handover creates one escalation and sends a fixed holding message', 
   assert.equal(harness.dispatched[0].content, HOLDING_MESSAGE);
   assert.equal(harness.dispatched[0].source, 'system');
   assert.equal(harness.states[0].status, 'escalated');
+  assert.equal(harness.maintenanceCases.length, 0);
+});
+
+test('maintenance handover records the verified apartment and still escalates', async () => {
+  const harness = createHarness({ escalationCreated: true });
+
+  const result = await harness.handler.handleAiOutcome({
+    conversation,
+    aiResult: { classification: 'human_handover', draft: null },
+    reservationContext: {
+      reservation: { id: 'reservation-1' },
+      apartment: { id: 'apartment-1' },
+    },
+    inboundMessageId: 'inbound-maintenance-1',
+    handoverReason: 'maintenance issue',
+    maintenanceIssue: {
+      apartmentId: 'apartment-1',
+      description: 'The air conditioner is not working.',
+    },
+  });
+
+  assert.equal(harness.maintenanceCases.length, 1);
+  assert.deepEqual(harness.maintenanceCases[0], {
+    conversationId: 'conversation-1',
+    apartmentId: 'apartment-1',
+    description: 'The air conditioner is not working.',
+  });
+  assert.equal(harness.escalations.length, 1);
+  assert.equal(harness.escalations[0].reason, 'maintenance issue');
+  assert.equal(harness.dispatched[0].content, HOLDING_MESSAGE);
+  assert.equal(result.maintenance.created, true);
+});
+
+test('maintenance persistence failure does not suppress human handover', async () => {
+  const harness = createHarness({
+    maintenanceError: new Error('maintenance database unavailable'),
+  });
+
+  const result = await harness.handler.handleAiOutcome({
+    conversation,
+    aiResult: { classification: 'human_handover', draft: null },
+    reservationContext,
+    inboundMessageId: 'inbound-maintenance-2',
+    handoverReason: 'maintenance issue',
+    maintenanceIssue: {
+      apartmentId: 'apartment-1',
+      description: 'There is no hot water.',
+    },
+  });
+
+  assert.equal(result.action, 'escalated');
+  assert.equal(harness.escalations.length, 1);
+  assert.equal(harness.dispatched[0].content, HOLDING_MESSAGE);
 });
 
 test('existing escalation is reused without sending another holding message', async () => {

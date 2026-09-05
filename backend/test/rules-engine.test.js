@@ -80,6 +80,23 @@ test('routes maintenance and explicit human requests to human handover', async (
   assert.equal(human.reason, 'guest requested human support');
 });
 
+test('recognises a small set of common maintenance reports', async () => {
+  const reports = [
+    'There is no hot water.',
+    'The shower is leaking.',
+    'The toilet is blocked.',
+    'The light is not working.',
+    'The door lock is broken.',
+    'There is a power issue.',
+  ];
+
+  for (const report of reports) {
+    const result = await runRulesEngine(report, reservation, apartment);
+    assert.equal(result.outcome, 'human_handover', report);
+    assert.equal(result.reason, 'maintenance issue', report);
+  }
+});
+
 test('does not send protected factual requests to AI when structured data is missing', async () => {
   const wifi = await runRulesEngine('What is the Wi-Fi password?', reservation, null);
   const checkin = await runRulesEngine('What time is check-in?', reservation, null);

@@ -11,6 +11,7 @@ function isManualConversation(conversation) {
 function createAiOutcomeHandler({
   dispatchTextMessage,
   ensureEscalation,
+  ensureMaintenanceCase,
   updateAiActionState,
   getAutomationSettings,
   logger,
@@ -120,6 +121,8 @@ function createAiOutcomeHandler({
     aiResult,
     reservationContext,
     inboundMessageId,
+    handoverReason,
+    maintenanceIssue,
   }) {
     if (!conversation?.id || !conversation?.guest_phone) {
       throw new Error('A conversation with guest_phone is required');
@@ -176,12 +179,32 @@ function createAiOutcomeHandler({
     }
 
     if (classification === 'human_handover') {
-      return escalate({
+      let maintenance = null;
+      if (maintenanceIssue) {
+        try {
+          maintenance = await ensureMaintenanceCase({
+            conversationId: conversation.id,
+            apartmentId: maintenanceIssue.apartmentId ?? null,
+            description: maintenanceIssue.description,
+          });
+        } catch (error) {
+          // Maintenance persistence must never suppress the safety handover.
+          logger.error('Maintenance case could not be recorded; continuing handover', {
+            conversationId: conversation.id,
+            error: error.message,
+          });
+        }
+      }
+
+      const result = await escalate({
         conversation,
-        reason: 'AI classified the latest guest message as requiring human handover.',
+        reason:
+          handoverReason ||
+          'AI classified the latest guest message as requiring human handover.',
         inboundMessageId,
         notifyGuest: true,
       });
+      return { ...result, maintenance };
     }
 
     return escalate({
@@ -204,12 +227,14 @@ function getDefaultHandler() {
   const logger = require('../../utils/logger');
   const { dispatchTextMessage } = require('../messages/dispatcher');
   const { ensureEscalation } = require('../escalations/service');
+  const { ensureMaintenanceCase } = require('../maintenance/service');
   const { getAutomationSettings } = require('../settings/automation');
 
   defaultHandler = createAiOutcomeHandler({
     logger,
     dispatchTextMessage,
     ensureEscalation,
+    ensureMaintenanceCase,
     getAutomationSettings,
     async updateAiActionState({ conversationId, status, inboundMessageId }) {
       const payload = { ai_action_status: status };

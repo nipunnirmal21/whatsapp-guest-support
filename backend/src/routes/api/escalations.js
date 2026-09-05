@@ -43,6 +43,15 @@ router.get('/', async (req, res, next) => {
           ai_classification,
           ai_draft,
           last_message_at,
+          maintenance_cases (
+            id,
+            apartment_id,
+            category,
+            severity,
+            status,
+            description,
+            created_at
+          ),
           reservation:reservations (
             booking_id,
             status,

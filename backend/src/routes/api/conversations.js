@@ -35,6 +35,15 @@ router.get('/', async (req, res, next) => {
           email,
           role
         ),
+        maintenance_cases (
+          id,
+          apartment_id,
+          category,
+          severity,
+          status,
+          description,
+          created_at
+        ),
         reservation:reservations (
           id,
           booking_source,
@@ -95,6 +104,15 @@ router.get('/:id', async (req, res, next) => {
           name,
           email,
           role
+        ),
+        maintenance_cases (
+          id,
+          apartment_id,
+          category,
+          severity,
+          status,
+          description,
+          created_at
         ),
         reservation:reservations (
           id,
