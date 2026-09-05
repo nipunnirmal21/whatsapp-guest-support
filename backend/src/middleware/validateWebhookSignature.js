@@ -36,7 +36,10 @@ function validateWebhookSignature(req, res, next) {
     sigBuffer.length !== expectedBuffer.length ||
     !crypto.timingSafeEqual(sigBuffer, expectedBuffer)
   ) {
-    logger.warn('Webhook signature mismatch', { received: signature });
+    logger.warn('Webhook signature mismatch', {
+      signaturePresent: true,
+      signatureLength: signature.length,
+    });
     return res.status(403).json({ error: 'Invalid signature' });
   }
 

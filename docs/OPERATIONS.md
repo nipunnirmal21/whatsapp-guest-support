@@ -25,6 +25,9 @@ The server refuses to start when any of these are missing:
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 
+Production also requires `DASHBOARD_ORIGIN`, set to the exact Vercel origin
+without a trailing slash (for example, `https://your-dashboard.vercel.app`).
+
 `LLM_API_KEY` is not a startup requirement, but real AI classification requires it. Missing/invalid AI configuration produces a safe human-handover result.
 
 `SUPABASE_DB_URL` is required by migrations and database integration tests, not normal runtime requests.
@@ -99,7 +102,11 @@ The dashboard uses Supabase Auth email/password sessions. Provision staff accoun
 
 ## CORS and hosting
 
-In development, the backend allows all origins. In production, the current backend uses `BASE_URL` as its allowed CORS origin and also uses it when reporting the webhook endpoint at startup. A same-origin deployment works with this model. If frontend and backend use different origins, introduce a dedicated frontend-origin configuration before deployment rather than weakening CORS.
+The backend accepts browser requests from local Vite (`localhost:5173` or
+`127.0.0.1:5173`) during development. In production it accepts exactly the
+`DASHBOARD_ORIGIN` value. Requests without an `Origin`, including Meta webhook
+deliveries and health probes, continue to work. `BASE_URL` is optional and is
+used only to report the public webhook URL in startup logs.
 
 ## Migration operations
 

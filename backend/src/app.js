@@ -22,6 +22,22 @@ const settingsRouter         = require('./routes/api/settings');
 const adminUsersRouter       = require('./routes/api/adminUsers');
 
 const app = express();
+const dashboardOrigin = process.env.DASHBOARD_ORIGIN;
+const localDashboardOrigins = new Set([
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+]);
+
+function isAllowedCorsOrigin(origin) {
+  // Server-to-server requests such as Meta webhooks do not send Origin.
+  if (!origin) return true;
+
+  if (process.env.NODE_ENV === 'production') {
+    return Boolean(dashboardOrigin && origin === dashboardOrigin);
+  }
+
+  return localDashboardOrigins.has(origin) || origin === dashboardOrigin;
+}
 
 // ---------------------------------------------------------------------------
 // Security & general middleware
@@ -30,9 +46,9 @@ app.use(helmet());
 
 app.use(
   cors({
-    origin: process.env.NODE_ENV === 'production'
-      ? process.env.BASE_URL
-      : '*',
+    origin(origin, callback) {
+      callback(null, isAllowedCorsOrigin(origin));
+    },
   })
 );
 
@@ -133,11 +149,15 @@ app.get('/health', async (_req, res) => {
       message: err.message,
     });
 
+    const error = process.env.NODE_ENV === 'production'
+      ? 'Database health check failed'
+      : err.message;
+
     return res.status(503).json({
       ...payload,
       status: 'degraded',
       database: 'unreachable',
-      error: err.message,
+      error,
     });
   }
 });

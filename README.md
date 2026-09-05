@@ -140,6 +140,16 @@ npm.cmd run build
 
 The backend quality gate enforces minimum coverage of 70% lines, 75% branches, and 60% functions. Database concurrency tests require a dedicated test database and are intentionally excluded from the normal test run. See [Testing Guide](docs/TESTING.md).
 
+## Deployment targets
+
+- Render/Railway: use `backend` as the root directory, install with `npm ci`,
+  start with `npm start`, and health-check `/health`. The server binds to the
+  platform-provided `PORT` on `0.0.0.0`.
+- Vercel: use `frontend` as the root directory and build with `npm run build`.
+  No `vercel.json` is required for the current single-page dashboard.
+- Set `DASHBOARD_ORIGIN` on the backend to the exact deployed Vercel origin;
+  keep `BASE_URL` as the optional public backend URL used in startup logging.
+
 ## Documentation
 
 - [Developer Guide](docs/DEVELOPER_GUIDE.md)

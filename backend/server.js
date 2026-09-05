@@ -4,6 +4,7 @@ const app    = require('./src/app');
 const logger = require('./src/utils/logger');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
+const HOST = '0.0.0.0';
 
 // ---------------------------------------------------------------------------
 // Validate that all critical env vars are present before starting
@@ -17,6 +18,10 @@ const REQUIRED_ENV = [
   'SUPABASE_SERVICE_ROLE_KEY',
 ];
 
+if (process.env.NODE_ENV === 'production') {
+  REQUIRED_ENV.push('DASHBOARD_ORIGIN');
+}
+
 const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
 if (missing.length > 0) {
   logger.error(`Missing required environment variables: ${missing.join(', ')}`);
@@ -27,8 +32,9 @@ if (missing.length > 0) {
 // ---------------------------------------------------------------------------
 // Start the server
 // ---------------------------------------------------------------------------
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, HOST, () => {
   logger.info(`WhatsApp Guest Support API running`, {
+    host: HOST,
     port: PORT,
     environment: process.env.NODE_ENV || 'development',
     webhookEndpoint: `${process.env.BASE_URL || `http://localhost:${PORT}`}/webhooks/whatsapp`,
